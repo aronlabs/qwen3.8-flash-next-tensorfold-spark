@@ -1,0 +1,122 @@
+{
+ "prefill": {
+  "4000": {
+   "tok_s": 4307.503745063326,
+   "wall_s": 1.225511703058146,
+   "prompt": 3163
+  },
+  "16000": {
+   "tok_s": 2687.979214214104,
+   "wall_s": 4.8533355355612,
+   "prompt": 12595
+  },
+  "32000": {
+   "tok_s": 2649.0772929750597,
+   "wall_s": 9.721675975539256,
+   "prompt": 25153
+  },
+  "64000": {
+   "tok_s": 2559.3859591080527,
+   "wall_s": 20.047775237937458,
+   "prompt": 50284
+  }
+ },
+ "decode": {
+  "codex1": {
+   "streams": 1,
+   "per_stream": 90.6483481463121,
+   "aggregate_wall": 89.40607080152358,
+   "acceptance": 0.7760617760617761
+  },
+  "codex2": {
+   "streams": 2,
+   "per_stream": 74.24896104767733,
+   "aggregate_wall": 144.57964318163332,
+   "acceptance": 0.7760617760617761
+  },
+  "codex3": {
+   "streams": 3,
+   "per_stream": 76.68100645687514,
+   "aggregate_wall": 223.50086462340005,
+   "acceptance": 0.7760617760617761
+  },
+  "codex4": {
+   "streams": 4,
+   "per_stream": 72.04133980263958,
+   "aggregate_wall": 279.13341901251016,
+   "acceptance": 0.7760617760617761
+  },
+  "codex5": {
+   "streams": 5,
+   "per_stream": 66.21861943593322,
+   "aggregate_wall": 319.1954820692008,
+   "acceptance": 0.7760617760617761
+  },
+  "editx1": {
+   "streams": 1,
+   "per_stream": 102.93890575943178,
+   "aggregate_wall": 102.25855620076734,
+   "acceptance": 0.9411764705882353
+  },
+  "editx2": {
+   "streams": 2,
+   "per_stream": 94.55222961913586,
+   "aggregate_wall": 174.6128917119741,
+   "acceptance": 0.9411764705882353
+  },
+  "editx3": {
+   "streams": 3,
+   "per_stream": 66.03628124515909,
+   "aggregate_wall": 175.55819226299843,
+   "acceptance": 0.9411764705882353
+  },
+  "editx4": {
+   "streams": 4,
+   "per_stream": 49.82227643246454,
+   "aggregate_wall": 154.0884961072524,
+   "acceptance": 0.9411764705882353
+  },
+  "editx5": {
+   "streams": 5,
+   "per_stream": 44.20920110390498,
+   "aggregate_wall": 170.7563802257012,
+   "acceptance": 0.9411764705882353
+  },
+  "prosex1": {
+   "streams": 1,
+   "per_stream": 52.26463052376918,
+   "aggregate_wall": 51.82552229507589,
+   "acceptance": 0.5068762278978389
+  },
+  "prosex2": {
+   "streams": 2,
+   "per_stream": 47.437332041120285,
+   "aggregate_wall": 93.41883112014162,
+   "acceptance": 0.5068762278978389
+  },
+  "prosex3": {
+   "streams": 3,
+   "per_stream": 39.85132220725039,
+   "aggregate_wall": 117.36545284696311,
+   "acceptance": 0.5068762278978389
+  },
+  "prosex4": {
+   "streams": 4,
+   "per_stream": 41.03057106180323,
+   "aggregate_wall": 161.22352254339975,
+   "acceptance": 0.5068762278978389
+  },
+  "prosex5": {
+   "streams": 5,
+   "per_stream": 38.17658329417594,
+   "aggregate_wall": 187.28307625332516,
+   "acceptance": 0.5068762278978389
+  },
+  "chat_thinkx1": {
+   "streams": 1,
+   "per_stream": 56.62188099808061,
+   "aggregate_wall": 55.78018759757455,
+   "acceptance": 0.624390243902439
+  }
+ }
+}

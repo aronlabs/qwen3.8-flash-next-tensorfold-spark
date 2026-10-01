@@ -2,7 +2,7 @@
 # Serve Qwen3.8-Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.0 + Speed Patches
 set -euo pipefail
 
-IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.0-speed}"
+IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.0-concurrent}"
 CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
@@ -13,7 +13,10 @@ PARALLEL="${PARALLEL:-5}"
 CONTEXT="${CONTEXT:-262144}"
 KV_DTYPE="${KV_DTYPE:-int8}"
 MTP_DRAFTS="${MTP_DRAFTS:-6}"
-MTP_CONFIDENCE="${MTP_CONFIDENCE:-0.60}"
+MTP_CONFIDENCE="${MTP_CONFIDENCE:-0.65}"
+CHECKPOINT_SLOTS="${CHECKPOINT_SLOTS:-6}"
+DECODE_SHARE="${DECODE_SHARE:-0.25}"
+PREFILL_ROWS="${TENSORFOLD_PREFILL_ROWS:-8192}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-0.95}"
 TOP_K="${TOP_K:-20}"
@@ -30,6 +33,8 @@ docker run -d --name "$CONTAINER_NAME" \
   --gpus all --ipc=host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   -e HF_HUB_OFFLINE=1 \
+  -e TENSORFOLD_PREFILL_ROWS="$PREFILL_ROWS" \
+  -e TENSORFOLD_SSD_NATIVE=1 \
   -e TORCH_EXTENSIONS_DIR=/cache/torch_extensions_v060 \
   -e TRITON_CACHE_DIR=/cache/triton_v060 \
   -v "$HF_CACHE":/root/.cache/huggingface \
@@ -42,6 +47,8 @@ docker run -d --name "$CONTAINER_NAME" \
     --kv-dtype "$KV_DTYPE" \
     --mtp-drafts "$MTP_DRAFTS" \
     --mtp-confidence "$MTP_CONFIDENCE" \
+    --checkpoint-slots "$CHECKPOINT_SLOTS" \
+    --decode-share "$DECODE_SHARE" \
     --temperature "$TEMPERATURE" \
     --top-p "$TOP_P" \
     --top-k "$TOP_K" \

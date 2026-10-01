@@ -1,0 +1,134 @@
+{
+ "short_greedy": {
+  "sha": "047d8dbe437c",
+  "wall": 1.5185313250403851,
+  "prefill_s": 0.0509,
+  "decode_s": 1.3614,
+  "prompt": 26,
+  "out": 62,
+  "cached": 0,
+  "drafted": 78,
+  "accepted": 30
+ },
+ "think_sampled": {
+  "sha": "f253702baae9",
+  "wall": 2.4062863750150427,
+  "prefill_s": 0.0754,
+  "decode_s": 2.1753,
+  "prompt": 62,
+  "out": 169,
+  "cached": 0,
+  "drafted": 156,
+  "accepted": 123
+ },
+ "long20k_greedy": {
+  "sha": "1aa5bfb24c8e",
+  "wall": 6.64866120100487,
+  "prefill_s": 5.5086,
+  "decode_s": 0.5339,
+  "prompt": 15735,
+  "out": 28,
+  "cached": 0,
+  "drafted": 41,
+  "accepted": 15
+ },
+ "long45k_sampled": {
+  "sha": "605066e13629",
+  "wall": 15.244898449047469,
+  "prefill_s": 13.1398,
+  "decode_s": 1.5488,
+  "prompt": 35370,
+  "out": 96,
+  "cached": 0,
+  "drafted": 74,
+  "accepted": 59
+ },
+ "edit_greedy": {
+  "sha": "3dee18363e47",
+  "wall": 13.185120481066406,
+  "prefill_s": 0.5619,
+  "decode_s": 12.1519,
+  "prompt": 2368,
+  "out": 1200,
+  "cached": 0,
+  "drafted": 1071,
+  "accepted": 1008
+ },
+ "edit_sampled": {
+  "sha": "7fe809310a60",
+  "wall": 11.87273612304125,
+  "prefill_s": 0.0327,
+  "decode_s": 11.7895,
+  "prompt": 2368,
+  "out": 1200,
+  "cached": 2367,
+  "drafted": 1055,
+  "accepted": 1007
+ },
+ "resend_long20k": {
+  "sha": "1aa5bfb24c8e",
+  "wall": 0.5998234519502148,
+  "prefill_s": 0.0182,
+  "decode_s": 0.502,
+  "prompt": 15735,
+  "out": 28,
+  "cached": 15734,
+  "drafted": 41,
+  "accepted": 15
+ },
+ "concurrent_short_greedy": {
+  "sha": "047d8dbe437c",
+  "wall": 10.456699693924747,
+  "prefill_s": 0.3565,
+  "decode_s": 8.747,
+  "prompt": 26,
+  "out": 62,
+  "cached": 25,
+  "drafted": 78,
+  "accepted": 30
+ },
+ "concurrent_think_sampled": {
+  "sha": "f253702baae9",
+  "wall": 13.52021985698957,
+  "prefill_s": 0.3001,
+  "decode_s": 11.7972,
+  "prompt": 62,
+  "out": 169,
+  "cached": 61,
+  "drafted": 156,
+  "accepted": 123
+ },
+ "concurrent_long45k_sampled": {
+  "sha": "605066e13629",
+  "wall": 47.10649670299608,
+  "prefill_s": 44.0952,
+  "decode_s": 1.51,
+  "prompt": 35370,
+  "out": 96,
+  "cached": 0,
+  "drafted": 74,
+  "accepted": 59
+ },
+ "concurrent_edit_greedy": {
+  "sha": "3dee18363e47",
+  "wall": 43.51554216607474,
+  "prefill_s": 0.2995,
+  "decode_s": 41.793,
+  "prompt": 2368,
+  "out": 1200,
+  "cached": 2367,
+  "drafted": 1071,
+  "accepted": 1008
+ },
+ "concurrent_edit_sampled": {
+  "sha": "7fe809310a60",
+  "wall": 43.6897717009997,
+  "prefill_s": 0.3063,
+  "decode_s": 41.9645,
+  "prompt": 2368,
+  "out": 1200,
+  "cached": 0,
+  "drafted": 1055,
+  "accepted": 1007
+ }
+}
