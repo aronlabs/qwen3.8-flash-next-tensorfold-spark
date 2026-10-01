@@ -4,6 +4,7 @@
 Usage: tfab.py parity|bench LABEL      (writes LABEL-parity.json / LABEL-bench.json next to this file)
 """
 import json
+import os
 import random
 import statistics
 import sys
@@ -12,7 +13,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-URL = "http://10.10.2.196:8888/v1/chat/completions"
+URL = os.environ.get("TF_URL", "http://127.0.0.1:8888/v1/chat/completions")
 HERE = Path(__file__).resolve().parent
 WORDS = ("time year people way day man thing woman life child world school state family student group country "
          "problem hand part place case week company system program question work government number night point "
