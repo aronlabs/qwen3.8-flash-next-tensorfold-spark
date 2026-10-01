@@ -1,0 +1,574 @@
+diff --git tensorfold/cuda/geometry.py tensorfold/cuda/geometry.py
+index 44d7994..44b897b 100644
+--- tensorfold/cuda/geometry.py
++++ tensorfold/cuda/geometry.py
+@@ -3,17 +3,30 @@
+ from __future__ import annotations
+ 
+ import math
++import os
+ import re
+ 
+ from .capacity import Geometry, Weights, headers, itemsize
+ 
+-PREFILL_ROWS = 2048     # a prompt chunk's rows: Flash Next and GLM keep buffers of this many rows
++PREFILL_ROWS = 2048     # a prompt chunk's rows: GLM keeps buffers of this many rows, Flash Next by default
+ PROMPT_SHARE = 32       # a dense prompt chunk's arrays take at most this fraction of the GPU's memory
+ PREFILL_ATT_ROWS = 256  # Flash Next's prompt attention block
+ MLA_PROMPT_ATT_ROWS = 512   # GLM's prompt-chunk rows one dense latent attention call takes (forward.PROMPT_ATT_ROWS)
+ MLA_SELECT_ROWS = 512       # GLM's prompt-chunk rows whose pool scores are held at once (sparse.SELECT_ROWS)
+ 
+ 
++def indexed_prefill_rows() -> int:
++    """Flash Next's prompt chunk rows on MLX and NVFP4 checkpoints: PREFILL_ROWS, or TENSORFOLD_PREFILL_ROWS (256 to
++    16,384; EXL3 packs keep PREFILL_ROWS). A row's bits never depend on its chunk: wider chunks prefill long prompts
++    faster and take more memory, which on a unified-memory GPU the n-gram tables' page cache may need."""
++
++    rows = int(os.environ.get("TENSORFOLD_PREFILL_ROWS") or PREFILL_ROWS)
++    if not 256 <= rows <= 16384:
++        raise ValueError(f"TENSORFOLD_PREFILL_ROWS: 256 to 16,384 rows, not {rows}")
++    return rows
++
++
++
+ def size(info: dict, name: str = "tensor") -> int:
+     return math.prod(info["shape"]) * itemsize(info, name)
+ 
+@@ -157,7 +170,8 @@ def live_kv(t: dict, world: int, window: int) -> int:
+ 
+ 
+ def gdn_geometry(t: dict, world: int, reserve: int, *, indexed: bool = False, mtp: bool = False,
+-                 kv_bits: int = 16, rows: int | None = None, prompt: int = 0, evicts: bool = False) -> Geometry:
++                 kv_bits: int = 16, rows: int | None = None, prompt: int = 0, evicts: bool = False,
++                 prefill_rows: int = PREFILL_ROWS) -> Geometry:
+     """``rows``: widest verify; ``prompt``: chunk rows sharing its scratch; ``evicts``: only the live window counts."""
+ 
+     linear, attention = layer_counts(t)
+@@ -183,7 +197,7 @@ def gdn_geometry(t: dict, world: int, reserve: int, *, indexed: bool = False, mt
+     fixed += (2 if mtp else 1) * 32 * rows * 2560 * 4
+     if indexed:
+         fixed += 4 * (int(t.get("ple_conv_kernel_size", 4)) - 1) * int(t.get("ngram_size", 3)) * streams * d * 2
+-        fixed += PREFILL_ROWS * _indexed_prefill_row(t, world, h, hk, hd, nv, dv, width, slots, intermediate)
++        fixed += prefill_rows * _indexed_prefill_row(t, world, h, hk, hd, nv, dv, width, slots, intermediate)
+     count = attention + int(mtp)
+     budget = int(t.get("indexer_budget", 2048))
+     row = kv_bytes(hd, kv_bits)
+@@ -388,7 +402,7 @@ def stream_geometry(t: dict, world: int, streams: int, keep: int, *, first: int
+ 
+ 
+ def indexed_stream_geometry(t: dict, streams: int, each: int, keep: int, *, mtp: bool, kv_bits: int = 16,
+-                            first: int = 256) -> Geometry:
++                            first: int = 256, prefill_rows: int = PREFILL_ROWS) -> Geometry:
+     """Flash Next's concurrent decoder on one GPU: per-row windows and kept snapshots sized to share one GPU."""
+ 
+     linear, attention = layer_counts(t)
+@@ -405,7 +419,7 @@ def indexed_stream_geometry(t: dict, streams: int, each: int, keep: int, *, mtp:
+     moe = int(t.get("moe_intermediate_size", t.get("intermediate_size", d)))
+     extent = d * hc + int(t["vocab_size"]) + slots * (moe + d) + width + h * hd
+     fixed += (1 + mtp) * (linear * rows * width * 2 + 32 * max(rows, 4) * 2560 * 4) + 16 * max(64, rows) * extent * 4
+-    fixed += PREFILL_ROWS * _indexed_prefill_row(t, 1, h, hk, hd, nv, dv, width, slots, moe)
++    fixed += prefill_rows * _indexed_prefill_row(t, 1, h, hk, hd, nv, dv, width, slots, moe)
+     count, row = attention + int(mtp), kv_bytes(hd, kv_bits)
+     def caches(rows: int) -> int:
+         return count * (2 * rows * hk * row + (rows + (rows + ratio - 1) // ratio) * index_dim * 2)
+diff --git tensorfold/families/qwen4_exp/cuda/decode.py tensorfold/families/qwen4_exp/cuda/decode.py
+index 6548c6f..b5653ab 100644
+--- tensorfold/families/qwen4_exp/cuda/decode.py
++++ tensorfold/families/qwen4_exp/cuda/decode.py
+@@ -15,7 +15,7 @@ from tensorfold.cuda.sampling import comm_gather, nucleus_rows, sample_rows
+ from tensorfold.engine.exact_sampling import MARGIN, Sampling, choose_rows
+ 
+ from . import CONFIDENCE, DEPTH
+-from .forward import Cut, commit, cut_snapshot, forward
++from .forward import Cut, commit, compute, cut_snapshot, forward, history_after, read_ahead, stage
+ from .state import CAND, Buffers, State
+ from .mtp import mtp_forward
+ from .weights import Weights
+@@ -292,7 +292,10 @@ def prefill_chunk(e: Engine, prompt: Sequence[int], start: int, *, mtp: bool = T
+     point = keep_at - start if keep_at is not None and start < keep_at <= end else 0     # the kept point's row
+     cut = Cut(point) if 0 < point < R else None           # inside the chunk, not at its end
+     # only the prompt's last row is sampled: the head runs on the final chunk alone
+-    logits = forward(w, st, pb, chunk, logits=final, cut=cut)
++    segs = stage(w, pb, [(st, chunk)])
++    if not final:                # the next chunk's n-gram rows are read while the GPU runs this one
++        read_ahead(w, [(history_after(w, st.ple_history, chunk), prompt[end:end + e.prefill_rows])])
++    logits = compute(w, segs, pb, logits=final, cuts=() if cut is None else (cut,))
+     last = logits.clone() if final else None
+     e.last_streams = pb.streams[R - 1:R].clone()
+     use_mtp = _absorbs(e, mtp)
+diff --git tensorfold/families/qwen4_exp/cuda/engine.py tensorfold/families/qwen4_exp/cuda/engine.py
+index 4a78fd2..014de69 100644
+--- tensorfold/families/qwen4_exp/cuda/engine.py
++++ tensorfold/families/qwen4_exp/cuda/engine.py
+@@ -40,7 +40,8 @@ class FlashNextEngine:
+         from .kvcache import BITS_OF, check as check_kv
+         from .weights import draft_token_ids, load
+         from tensorfold.cuda.capacity import admit, gather_ints
+-        from tensorfold.cuda.geometry import gdn_geometry, indexed_stream_geometry, indexed_weights
++        from tensorfold.cuda.geometry import (PREFILL_ROWS, gdn_geometry, indexed_prefill_rows,
++                                              indexed_stream_geometry, indexed_weights)
+ 
+         if tp not in (1, 2) or rank not in range(tp):
+             raise ValueError(f"rank {rank} of {tp}: Flash Next runs on one GPU or two")
+@@ -65,10 +66,14 @@ class FlashNextEngine:
+             self.comm.barrier()
+         gather = (lambda values: gather_ints(torch, self.comm.all_gather, values)) if tp == 2 else None
+         each, mtp, bits = self.depth + 1, self.depth > 0, BITS_OF[self.kv_dtype]
++        # prompt chunk rows (TENSORFOLD_PREFILL_ROWS); an EXL3 pack's n-gram staging holds 2,048
++        rows = PREFILL_ROWS if exl3 else indexed_prefill_rows()
+         # one admission for one stream or many (every slot, the shared rows and kept snapshots), before any load
+-        geometry = ((lambda text: indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits))
++        geometry = ((lambda text: indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits,
++                                                          prefill_rows=rows))
+                     if streams > 1 else
+-                    (lambda text: gdn_geometry(text, tp, each, indexed=True, mtp=mtp, kv_bits=bits)))
++                    (lambda text: gdn_geometry(text, tp, each, indexed=True, mtp=mtp, kv_bits=bits,
++                                               prefill_rows=rows)))
+         if exl3:
+             geometry = admission(geometry)
+         self.capacity_plan = admit(model_dir, max_len, context_explicit, torch, geometry,
+@@ -110,11 +115,12 @@ class FlashNextEngine:
+ 
+             self.e = None
+             self.multi = MultiDecoder(w, slots=streams, capacity=self.max_len, depth=self.depth,
+-                                      confidence=self.confidence, keep=KEEP, kv_dtype=self.kv_dtype, share=share)
++                                      confidence=self.confidence, keep=KEEP, kv_dtype=self.kv_dtype, share=share,
++                                      prefill_rows=rows)
+             self.scheduler = Scheduler(self.multi, max_streams=streams)
+         else:
+-            self.e = Engine(w, capacity=self.max_len, max_rows=max(8, self.depth + 1), graphs=graphs,
+-                            kv_dtype=self.kv_dtype)
++            self.e = Engine(w, capacity=self.max_len, max_rows=max(8, self.depth + 1), prefill_rows=rows,
++                            graphs=graphs, kv_dtype=self.kv_dtype)
+         started = time.perf_counter()
+         locked = False
+         if prefetch and not ple_on_ssd:               # the n-gram tables' pages, read now rather than by requests
+@@ -148,15 +154,18 @@ class FlashNextEngine:
+                  f"{self.multi.window_bytes / 2**30:.2f} GiB for one at the full window), eager" if self.concurrent else
+                  f"{self.context_window}-token prompt/reply window; {self.max_len}-token cache")
+         if ple_on_ssd:
+-            how = "read from SSD at each lookup"
++            from .ssd_read import native_reader
++
++            how = (f"read from SSD at each lookup ({'native' if native_reader() is not None else 'Python'} reader, "
++                   f"prompt rows read ahead)")
+         elif tables_read:                             # read during the load: the wait after it, then any lock
+             how = f"read alongside the weights ({waited:.1f}s after them)" + (
+                 f", locked in memory in {read_s:.1f}s" if locked else "")
+         else:
+             how = f"{'locked in memory' if locked else 'read'} in {read_s:.1f}s"
+         kv = "" if self.kv_dtype == "bf16" else f"; {self.kv_dtype} KV cache (fp16 scale per 32 values)"
+-        print(f"[tensorfold] Flash Next on CUDA: {rule}; {where}{kv}; n-gram tables {how}; {captured} "
+-              f"decode graphs captured; prompt kernels warmed in {warm_s:.1f}s", flush=True)
++        print(f"[tensorfold] Flash Next on CUDA: {rule}; {where}{kv}; n-gram tables {how}; {rows}-row prompt chunks; "
++              f"{captured} decode graphs captured; prompt kernels warmed in {warm_s:.1f}s", flush=True)
+ 
+     def _same_settings(self, torch, ids) -> None:
+         """Both ranks must decode with the same rule, context, draft vocabulary and KV cache, or they would fall out of step: refuse to start otherwise."""
+diff --git tensorfold/families/qwen4_exp/cuda/forward.py tensorfold/families/qwen4_exp/cuda/forward.py
+index 0af42e6..4e68b62 100644
+--- tensorfold/families/qwen4_exp/cuda/forward.py
++++ tensorfold/families/qwen4_exp/cuda/forward.py
+@@ -449,6 +449,31 @@ def stage(w: Weights, b: Buffers, windows: Sequence[tuple[State, Sequence[int]]]
+     return segs
+ 
+ 
++def read_ahead(w: Weights, windows: Sequence[tuple[np.ndarray | None, Sequence[int]]]) -> None:
++    """Start reading the n-gram rows a later ``stage`` of each (history, tokens) looks up, where a table reads ahead
++    (``--ple-on-ssd``): the same bytes, read on a thread while the GPU runs the current forward."""
++
++    if w.x3 is not None:
++        return
++    for layer in w.layers:
++        p = layer.ple
++        start = getattr(p.table, "read_ahead", None) if p is not None else None
++        if start is None:
++            continue
++        for history, tokens in windows:
++            if len(tokens):
++                start(p.ngram.ids(history, np.asarray(tokens, dtype=np.int64)))
++
++
++def history_after(w: Weights, history: np.ndarray | None, tokens: Sequence[int]) -> np.ndarray | None:
++    """The n-gram history once ``tokens`` follow ``history`` (as ``commit`` leaves it after keeping them all)."""
++
++    if history is None:
++        return None
++    return np.concatenate([history, np.asarray(tokens, dtype=np.int64)])[-(w.cfg.ngram_size - 1):]
++
++
++
+ def compute(w: Weights, segs: Sequence[Seg], b: Buffers, *, logits: bool = True, context: int | None = None,
+             ends: Sequence[int] = (), cuts: Sequence[Cut] = ()):
+     """The forward's GPU work on staged rows (capturable); ``context`` bounds attention, ``ends`` get the head, ``cuts`` keep states."""
+diff --git tensorfold/families/qwen4_exp/cuda/multi.py tensorfold/families/qwen4_exp/cuda/multi.py
+index bdd3398..7a65bc7 100644
+--- tensorfold/families/qwen4_exp/cuda/multi.py
++++ tensorfold/families/qwen4_exp/cuda/multi.py
+@@ -18,7 +18,8 @@ from tensorfold.engine.grammar import GrammarError
+ 
+ from .decode import PREFILL_ROWS, WARM_TAIL, Engine, draft, entry_end, prefill_begin
+ from . import attn_multi, gdn_multi
+-from .forward import Cut, commit, compute, compute_mixed, converges, cut_snapshot, stage
++from .forward import (Cut, commit, compute, compute_mixed, converges, cut_snapshot, history_after, read_ahead,
++                      stage)
+ from .mtp import mtp_compute, mtp_stage
+ from .state import ENDS, Buffers, State
+ from ..cuda import CONFIDENCE, DEPTH
+@@ -27,6 +28,7 @@ FIRST, STEP = 256, 8192          # rows an idle slot keeps; rows a stream's cach
+ GIB = 1024**3
+ SHARE = 0.0                      # --decode-share: a round alone takes this share of its pass's time (0: whole passes)
+ PASS_MIN = 128                   # the fewest prompt rows a round's pass takes
++READ_AHEAD = 2                   # prompt pieces of the next pass whose n-gram rows are read ahead (ReadAhead.depth)
+ 
+ 
+ def _slot(w, st: State, buf: Buffers, mbuf: Buffers, pbuf: Buffers, capacity: int, prefill_rows: int) -> Engine:
+@@ -265,6 +267,26 @@ class MultiDecoder:
+             room -= n
+         return pieces
+ 
++    def _read_ahead(self, pieces, rows: int) -> None:
++        """Start reading the n-gram rows of the pass likely to follow this one (tables that read ahead, from SSD)
++        while the GPU runs this one; a wrong guess only costs the reads."""
++
++        after = {s.sid: a + n for s, a, n in pieces}
++        windows, room = [], rows
++        for s in sorted(self.filling, key=lambda x: x.background):
++            start = after.get(s.sid, self.fills[s.sid][2])
++            n = min(len(s.prompt) - start, room)
++            if n <= 0:
++                continue
++            staged = s.st.ple_last if s.sid in after else None        # this pass's piece, not committed yet
++            history = history_after(self.w, *staged) if staged is not None else s.st.ple_history
++            windows.append((history, s.prompt[start:start + n]))
++            room -= n
++            if room <= 0 or len(windows) == READ_AHEAD:
++                break
++        if windows:
++            read_ahead(self.w, windows)
++
+     def _pass(self) -> list[Stream]:
+         """One prompt pass alone; prompts that end sample their first token, draft and join the rounds."""
+ 
+@@ -272,6 +294,7 @@ class MultiDecoder:
+         t0 = time.perf_counter()
+         try:
+             segs = stage(self.w, self.pbuf, [(s.st, s.prompt[a:a + n]) for s, a, n in pieces])
++            self._read_ahead(pieces, self.prefill_rows)
+             ends, cuts = self._end_rows(pieces, segs), self._cuts(pieces, segs)
+             logits = compute(self.w, segs, self.pbuf, logits=bool(ends), ends=ends, cuts=cuts)
+             heads = logits[:len(ends)].clone() if ends else None
+@@ -409,6 +432,7 @@ class MultiDecoder:
+             try:
+                 psegs = stage(self.w, self.pbuf, [(s.st, s.prompt[a:a + n]) for s, a, n in pieces])
+                 cuts = self._cuts(pieces, psegs)
++                self._read_ahead(pieces, self._pass_rows())
+             except Exception as exc:                     # noqa: BLE001  (the pass's requests fail, the round goes on)
+                 ended += self._failed(pieces, exc)
+                 pieces = []
+diff --git tensorfold/families/qwen4_exp/cuda/ssd_read.cpp tensorfold/families/qwen4_exp/cuda/ssd_read.cpp
+new file mode 100644
+index 0000000..2c70d87
+--- /dev/null
++++ tensorfold/families/qwen4_exp/cuda/ssd_read.cpp
+@@ -0,0 +1,139 @@
++// Flash Next's n-gram rows from the checkpoint: a batch of preads on a persistent pool of threads, without the GIL.
++#include <torch/extension.h>
++
++#include <unistd.h>
++
++#include <algorithm>
++#include <atomic>
++#include <cerrno>
++#include <condition_variable>
++#include <cstring>
++#include <mutex>
++#include <stdexcept>
++#include <string>
++#include <thread>
++#include <vector>
++
++namespace {
++
++class Pool {
++ public:
++  ~Pool() {
++    {
++      std::lock_guard<std::mutex> lock(m_);
++      stop_ = true;
++    }
++    wake_.notify_all();
++    for (auto& t : threads_) t.join();
++  }
++
++  // Each row of ``reads`` (fd, offset, size, at): ``size`` bytes at ``offset`` of ``fd`` into ``out + at``.
++  void run(const int64_t* reads, int64_t n, uint8_t* out, int64_t threads) {
++    std::lock_guard<std::mutex> call(call_);          // one batch at a time
++    int64_t helpers = std::max<int64_t>(0, std::min<int64_t>(threads, n) - 1);
++    {
++      std::unique_lock<std::mutex> lock(m_);
++      while (static_cast<int64_t>(threads_.size()) < helpers) threads_.emplace_back([this] { loop(); });
++      reads_ = reads;
++      n_ = n;
++      out_ = out;
++      next_.store(0);
++      error_.clear();
++      busy_ = static_cast<int>(threads_.size());
++      ++generation_;
++    }
++    wake_.notify_all();
++    work();
++    std::unique_lock<std::mutex> lock(m_);
++    done_.wait(lock, [this] { return busy_ == 0; });
++    if (!error_.empty()) throw std::runtime_error(error_);
++  }
++
++ private:
++  void loop() {
++    uint64_t seen = 0;
++    {
++      std::lock_guard<std::mutex> lock(m_);
++      seen = generation_;           // a thread started for a batch joins it below
++      --seen;
++    }
++    for (;;) {
++      {
++        std::unique_lock<std::mutex> lock(m_);
++        wake_.wait(lock, [&] { return stop_ || generation_ != seen; });
++        if (stop_) return;
++        seen = generation_;
++      }
++      work();
++      std::lock_guard<std::mutex> lock(m_);
++      if (--busy_ == 0) done_.notify_all();
++    }
++  }
++
++  void work() {
++    for (;;) {
++      int64_t i = next_.fetch_add(1);
++      if (i >= n_) return;
++      const int64_t* r = reads_ + 4 * i;
++      int fd = static_cast<int>(r[0]);
++      int64_t offset = r[1], size = r[2], done = 0;
++      uint8_t* dst = out_ + r[3];
++      while (done < size) {
++        ssize_t got = pread(fd, dst + done, static_cast<size_t>(size - done), offset + done);
++        const int err = errno;          // before anything else (the lock below) can change it
++        if (got < 0 && err == EINTR) continue;
++        if (got <= 0) {
++          std::lock_guard<std::mutex> lock(m_);
++          if (error_.empty()) {
++            error_ = got == 0 ? "short read of the n-gram tables at byte " + std::to_string(offset + done) +
++                                    ": the checkpoint changed"
++                              : std::string("reading the n-gram tables: ") + std::strerror(err);
++          }
++          next_.store(n_);            // the rest of the batch is abandoned
++          return;
++        }
++        done += got;
++      }
++    }
++  }
++
++  std::mutex call_, m_;
++  std::condition_variable wake_, done_;
++  std::vector<std::thread> threads_;
++  const int64_t* reads_ = nullptr;
++  int64_t n_ = 0;
++  uint8_t* out_ = nullptr;
++  std::atomic<int64_t> next_{0};
++  std::string error_;
++  int busy_ = 0;
++  uint64_t generation_ = 0;
++  bool stop_ = false;
++};
++
++Pool& pool() {
++  static Pool* p = new Pool();      // never destroyed: its threads may outlive interpreter teardown
++  return *p;
++}
++
++void read_rows(torch::Tensor reads, torch::Tensor out, int64_t threads) {
++  TORCH_CHECK(reads.device().is_cpu() && reads.scalar_type() == torch::kInt64 && reads.dim() == 2 &&
++                  reads.size(1) == 4 && reads.is_contiguous(),
++              "reads must be a contiguous CPU int64 [n, 4] tensor");
++  TORCH_CHECK(out.device().is_cpu() && out.scalar_type() == torch::kUInt8 && out.is_contiguous(),
++              "out must be a contiguous CPU uint8 tensor");
++  const int64_t n = reads.size(0), cap = out.numel();
++  const int64_t* r = reads.data_ptr<int64_t>();
++  for (int64_t i = 0; i < n; ++i) {
++    TORCH_CHECK(r[4 * i + 2] >= 0 && r[4 * i + 3] >= 0 && r[4 * i + 3] + r[4 * i + 2] <= cap && r[4 * i + 1] >= 0,
++                "a read lands outside the output");
++  }
++  if (n == 0) return;
++  pybind11::gil_scoped_release nogil;
++  pool().run(r, n, out.data_ptr<uint8_t>(), std::max<int64_t>(1, threads));
++}
++
++}  // namespace
++
++PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
++  m.def("read_rows", &read_rows, "preads (fd, offset, size, at) into out, on up to `threads` threads, GIL released");
++}
+diff --git tensorfold/families/qwen4_exp/cuda/ssd_read.py tensorfold/families/qwen4_exp/cuda/ssd_read.py
+new file mode 100644
+index 0000000..f5bb039
+--- /dev/null
++++ tensorfold/families/qwen4_exp/cuda/ssd_read.py
+@@ -0,0 +1,37 @@
++"""The SSD n-gram reader's native path: a batch of preads on C++ threads, the GIL released (``ssd_read.cpp``)."""
++
++from __future__ import annotations
++
++import os
++from functools import lru_cache
++from pathlib import Path
++
++import numpy as np
++
++
++@lru_cache(maxsize=1)
++def _ext():
++    from tensorfold.cuda.build import load
++
++    return load(name="tensorfold_qwen4_exp_ssd_read", sources=[str(Path(__file__).parent / "ssd_read.cpp")],
++                extra_cflags=["-O2"], verbose=False)
++
++
++@lru_cache(maxsize=1)
++def native_reader():
++    """``SSDTable``'s ``native`` reader, or None where the extension does not build (TENSORFOLD_SSD_NATIVE=0: None)."""
++
++    if os.environ.get("TENSORFOLD_SSD_NATIVE", "1") == "0":
++        return None
++    try:
++        ext = _ext()
++    except Exception as exc:                                  # no compiler: the Python reader
++        print(f"[tensorfold] n-gram SSD reads stay on Python threads (the native reader did not build: {exc})",
++              flush=True)
++        return None
++    import torch
++
++    def read(reads: np.ndarray, out: np.ndarray, threads: int) -> None:
++        ext.read_rows(torch.from_numpy(np.ascontiguousarray(reads, dtype=np.int64)), torch.from_numpy(out), threads)
++
++    return read
+diff --git tensorfold/families/qwen4_exp/cuda/weights.py tensorfold/families/qwen4_exp/cuda/weights.py
+index 3c33a55..e65e8da 100644
+--- tensorfold/families/qwen4_exp/cuda/weights.py
++++ tensorfold/families/qwen4_exp/cuda/weights.py
+@@ -7,8 +7,9 @@ from pathlib import Path
+ import numpy as np
+ import torch
+ 
+-from ..host_table import open_table, shard_keys
++from ..host_table import ReadAhead, open_table, shard_keys
+ from .bf16 import b16_from_rows, quantize4, stack_b16
++from .ssd_read import native_reader
+ from tensorfold.cuda import experts as grouped
+ 
+ from .qmm import Q4, dequantize, make_q4, stack_q4
+@@ -310,7 +311,9 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
+                     raw(base + "ngram_heads_vocab_sizes").cpu().numpy())
+         keys = shard_keys(prefix + base + "ngram_embedding", cfg.ngram_shards, rd.where)
+         table = open_table(model_dir, [(rd.where[k + ".weight"], k) for k in keys],
+-                           lambda n: table_scale(base, n), ssd=ple_on_ssd)
++                           lambda n: table_scale(base, n), ssd=ple_on_ssd, native=native_reader() if ple_on_ssd else None)
++        if ple_on_ssd:              # from SSD, a prompt pass's rows are read on a thread while the GPU runs the one before
++            table = ReadAhead(table)
+         if table.rows != ngram.rows:
+             raise ValueError(f"n-gram tables hold {table.rows} rows, expected {ngram.rows}")
+         if table_reads is not None and not ple_on_ssd:     # its pages come in while the weights load
+diff --git tensorfold/families/qwen4_exp/host_table.py tensorfold/families/qwen4_exp/host_table.py
+index a8a970b..b4f330c 100644
+--- tensorfold/families/qwen4_exp/host_table.py
++++ tensorfold/families/qwen4_exp/host_table.py
+@@ -277,8 +277,8 @@ def shard_keys(name: str, count: int, names) -> list[str]:
+                   if key + ".weight" in names), f"{name}.shard_{i}") for i in range(count)]
+ 
+ 
+-def open_table(model_dir: Path, shards: list[tuple[str, str]], scale, *, ssd: bool = False):
+-    """The n-gram table in its shards' layout (MLX 4-bit, bf16, FP8, NVFP4); ``scale(name)`` reads a table scale."""
++def open_table(model_dir: Path, shards: list[tuple[str, str]], scale, *, ssd: bool = False, native=None):
++    """The n-gram table in its shards' layout (MLX 4-bit, bf16, FP8, NVFP4); ``scale(name)`` reads a table scale; ``native``: ``SSDTable``'s GIL-free reader (``ssd``)."""
+ 
+     headers: dict[str, dict] = {}
+     kinds: dict[str, list] = {"mlx": [], "bf16": [], "fp8": [], "nvfp4": []}
+@@ -302,7 +302,7 @@ def open_table(model_dir: Path, shards: list[tuple[str, str]], scale, *, ssd: bo
+         return NVFP4Table(files, scale("weight_scale_2"))
+     if used[0] == "fp8":
+         return FP8Table(files, scale("weight_scale"))
+-    table = BF16Table(files) if used[0] == "bf16" else SSDTable(files) if ssd else HostTable(files)
++    table = BF16Table(files) if used[0] == "bf16" else SSDTable(files, native=native) if ssd else HostTable(files)
+     table.weight_scale = float(scale("weight_scale"))
+     return table
+ 
+diff --git tensorfold/families/qwen4_exp/ssd_table.py tensorfold/families/qwen4_exp/ssd_table.py
+index aae4ad1..0f3ef56 100644
+--- tensorfold/families/qwen4_exp/ssd_table.py
++++ tensorfold/families/qwen4_exp/ssd_table.py
+@@ -12,6 +12,7 @@ from pathlib import Path
+ import numpy as np
+ 
+ WORKERS = 16                # reads in flight at once: os.pread releases the GIL
++NATIVE_WORKERS = 64         # the native reader's threads hold no GIL: the NVMe's deep queue, no cost to the caller
+ MAX_READ = 1 << 20          # bytes one read of adjacent rows may cover
+ _KINDS = (("weight", "U32", 4), ("scales", "BF16", 2), ("biases", "BF16", 2))
+ 
+@@ -64,7 +65,9 @@ def _fill(reads: list[tuple[int, int, int, memoryview, int]]) -> None:
+ class SSDTable:
+     """HostTable's rows, byte for byte, read from the checkpoint at each gather: deduplicated, coalesced, parallel."""
+ 
+-    def __init__(self, files: list[tuple[Path, dict, dict, dict]], *, nocache: bool = True) -> None:
++    def __init__(self, files: list[tuple[Path, dict, dict, dict]], *, nocache: bool = True, native=None) -> None:
++        # ``native(reads [n, 4] int64 (fd, offset, size, at), out uint8, threads)``: the reads without the GIL (CUDA)
++        self._native = native
+         self._fds: list[int] = []
+         self._pool = ThreadPoolExecutor(WORKERS, thread_name_prefix="ple-ssd")
+         self._closer = weakref.finalize(self, _release, self._fds, self._pool)
+@@ -125,6 +128,8 @@ class SSDTable:
+         unique, inverse = np.unique(flat.astype(np.int64), return_inverse=True)
+         shard = np.searchsorted(self.starts, unique, side="right") - 1
+         local, where = unique - self.starts[shard], self.fidx[shard]
++        if self._native is not None:
++            return self._gather_native(unique.size, inverse, shard, local, where)
+         outs, reads = [], []
+         for part, width in enumerate((self.wrow, self.grow, self.grow)):
+             outs.append(np.empty((unique.size, width), dtype=np.uint8))
+@@ -137,6 +142,35 @@ class SSDTable:
+         words, scales, biases = (out[inverse] for out in outs)
+         return words.view(np.uint32), scales.view(np.uint16), biases.view(np.uint16)
+ 
++    def _gather_native(self, n: int, inverse, shard, local, where) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++        """The same runs as ``_reads``, listed as one array and read by ``native`` into one buffer."""
++
++        widths = (self.wrow, self.grow, self.grow)
++        buf = np.empty(n * sum(widths), dtype=np.uint8)
++        runs, at = [], 0
++        for part, width in enumerate(widths):
++            runs.append(self._runs(where, self.bases[shard, part] + local * width, width, at))
++            at += n * width
++        self._native(np.concatenate(runs), buf, NATIVE_WORKERS)
++        words = buf[:n * self.wrow].reshape(n, self.wrow)
++        scales = buf[n * self.wrow:n * (self.wrow + self.grow)].reshape(n, self.grow)
++        biases = buf[n * (self.wrow + self.grow):].reshape(n, self.grow)
++        return (words[inverse].view(np.uint32), scales[inverse].view(np.uint16), biases[inverse].view(np.uint16))
++
++    def _runs(self, where: np.ndarray, offsets: np.ndarray, width: int, at: int) -> np.ndarray:
++        """``_reads`` as rows (fd, offset, size, at) of an int64 array, row i of the part landing at ``at + i * width``."""
++
++        n = offsets.size
++        if not n:
++            return np.zeros((0, 4), dtype=np.int64)
++        cut = np.ones(n, dtype=bool)
++        cut[1:] = (where[1:] != where[:-1]) | (offsets[1:] != offsets[:-1] + width)
++        first = np.flatnonzero(cut)
++        cut |= (np.arange(n) - first[np.cumsum(cut) - 1]) % max(1, MAX_READ // width) == 0
++        first = np.flatnonzero(cut)
++        rows = np.diff(first, append=n)
++        return np.stack([self._fd_of[where[first]], offsets[first], rows * width, at + first * width], axis=1)
++
+     def _reads(self, where: np.ndarray, offsets: np.ndarray, width: int, out: np.ndarray) -> list[tuple]:
+         """One read per run of rows adjacent in one file, each at most MAX_READ bytes, into ``out``'s rows."""
+ 
