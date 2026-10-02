@@ -1,8 +1,8 @@
-# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.1: Concurrency, Prefill & Speculative Tuning
+# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.2: Concurrency, Prefill & Speculative Tuning
 
 High-throughput, exact local inference for **Qwen3.8-Flash-Next** on a single **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory).
 
-This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.1**, introducing zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
+This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.2**, introducing zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
 
 ---
 
@@ -27,16 +27,16 @@ This repository ports, extends, and benchmarks the high-performance patches from
 
 This project builds directly on the foundational work of:
 
-* **[Ash Hart (@ashxhart)](https://github.com/ashhart/TensorFold):** Creator of **TensorFold**, an open-source, local-first inference engine designed for exact speculative decoding. Version 0.6.1 added coalesced waiting prefill passes, Blackwell layer projection tile fusion, shared prefix retention across message boundaries, and native vLLM-mirrored Prometheus metrics.
+* **[Ash Hart (@ashxhart)](https://github.com/ashhart/TensorFold):** Creator of **TensorFold**, an open-source, local-first inference engine designed for exact speculative decoding. Version 0.6.2 added SM 12.0 DeltaNet tree kernel speedups, grouped projection launches, coalesced waiting prefill passes, Blackwell layer projection tile fusion, shared prefix retention across message boundaries, and native vLLM-mirrored Prometheus metrics.
 * **[Mia's AI Lab (@MiaAI_Lab)](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold):** Created the original DGX Spark deployment recipe and authored the 64-thread persistent C++ multithreaded SSD n-gram reader (`ssd_read.cpp`), asynchronous read-ahead, and initial memory layout recipes.
 * **[MovieMaker93 (@MovieMaker93)](https://github.com/MovieMaker93):** Authored upstream [TensorFold PR #40](https://github.com/ashhart/TensorFold/pull/40) for dynamic prefill chunk geometry (`indexed_prefill_rows()`), enabling wide chunk sizing up to 16,384 rows.
 * **[Vontra](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP):** For the MLX affine 4-bit group-32 checkpoint with the native MTP speculative draft head.
 
 ---
 
-## 🛠️ Architecture & What Was Changed in 0.6.1
+## 🛠️ Architecture & What Was Changed in 0.6.2
 
-Upstream TensorFold 0.6.1 added major enhancements, but Mia's custom DGX Spark optimizations and our zero-copy multi-stream fixes were missing from the stock release. We re-based and combined the entire stack into `v061-concurrent.patch`:
+Upstream TensorFold 0.6.2 added major enhancements, but Mia's custom DGX Spark optimizations and our zero-copy multi-stream fixes were missing from the stock release. We re-based and combined the entire stack into `v062-concurrent.patch`:
 
 ### 1. Coalesced Waiting Prompt Prefill & Fused Normalization (Upstream 0.6.1)
 * **What it does:** In `--parallel 5`, waiting prompts that arrive concurrently now share one prefill forward: projections and MLPs execute over every waiting prompt's rows together, while convolutions and DeltaNet update per-stream state. Hyper-connection write-backs and RMSNorm run as a fused kernel.
@@ -178,9 +178,9 @@ cd qwen3.8-flash-next-tensorfold-spark
 ```
 
 ### Step 2: Build Image
-Builds TensorFold 0.6.1 with `v061-concurrent.patch` applied:
+Builds TensorFold 0.6.2 with `v062-concurrent.patch` applied:
 ```bash
-docker build -t tensorfold-qwen38:v0.6.1-concurrent .
+docker build -t tensorfold-qwen38:v0.6.2-concurrent .
 ```
 
 ### Step 3: Launch Production Server

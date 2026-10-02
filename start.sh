@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Serve Qwen3.8-Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.1 + Concurrency & Speed Patches
+# Serve Qwen3.8-Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.2 + Concurrency & Speed Patches
 set -euo pipefail
 
-IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.1-concurrent}"
+IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.2-concurrent}"
 CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
@@ -22,7 +22,7 @@ TOP_P="${TOP_P:-0.95}"
 TOP_K="${TOP_K:-20}"
 
 echo "Starting $CONTAINER_NAME ($IMAGE)..."
-mkdir -p "$KERNEL_CACHE/torch_extensions_v061" "$KERNEL_CACHE/triton_v061"
+mkdir -p "$KERNEL_CACHE/torch_extensions_v062" "$KERNEL_CACHE/triton_v062"
 
 if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
   echo "Stopping previous container..."
@@ -35,8 +35,8 @@ docker run -d --name "$CONTAINER_NAME" \
   -e HF_HUB_OFFLINE=1 \
   -e TENSORFOLD_PREFILL_ROWS="$PREFILL_ROWS" \
   -e TENSORFOLD_SSD_NATIVE=1 \
-  -e TORCH_EXTENSIONS_DIR=/cache/torch_extensions_v061 \
-  -e TRITON_CACHE_DIR=/cache/triton_v061 \
+  -e TORCH_EXTENSIONS_DIR=/cache/torch_extensions_v062 \
+  -e TRITON_CACHE_DIR=/cache/triton_v062 \
   -v "$HF_CACHE":/root/.cache/huggingface \
   -v "$KERNEL_CACHE":/cache \
   "$IMAGE" \
