@@ -2,7 +2,7 @@
 # Serve Qwen3.8-Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.2 + Concurrency & Speed Patches
 set -euo pipefail
 
-IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.2-concurrent}"
+IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.2-concurrent-vision}"
 CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
@@ -20,7 +20,9 @@ PREFILL_ROWS="${TENSORFOLD_PREFILL_ROWS:-8192}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-0.95}"
 TOP_K="${TOP_K:-20}"
-
+VISION="${VISION:-1}"
+VISION_MAX_IMAGES="${VISION_MAX_IMAGES:-50}"
+MAX_TOKENS="${MAX_TOKENS:-32768}"
 echo "Starting $CONTAINER_NAME ($IMAGE)..."
 mkdir -p "$KERNEL_CACHE/torch_extensions_v062" "$KERNEL_CACHE/triton_v062"
 
@@ -37,6 +39,9 @@ docker run -d --name "$CONTAINER_NAME" \
   -e TENSORFOLD_SSD_NATIVE=1 \
   -e TORCH_EXTENSIONS_DIR=/cache/torch_extensions_v062 \
   -e TRITON_CACHE_DIR=/cache/triton_v062 \
+  -e TENSORFOLD_IMAGE_TOKENS=16384 \
+  -e TENSORFOLD_VIDEO_TOKENS=16384 \
+  -e TENSORFOLD_VISION_WORKSPACE_MIB=0 \
   -v "$HF_CACHE":/root/.cache/huggingface \
   -v "$KERNEL_CACHE":/cache \
   "$IMAGE" \
@@ -54,6 +59,7 @@ docker run -d --name "$CONTAINER_NAME" \
     --top-k "$TOP_K" \
     --ple-on-ssd \
     --thinking \
+    $([ "$VISION" = "1" ] && echo "--vision --vision-max-images $VISION_MAX_IMAGES") \
     --host "$HOST" \
     --port "$PORT"
 

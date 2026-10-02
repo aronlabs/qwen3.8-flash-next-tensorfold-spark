@@ -8,19 +8,19 @@ This repository ports, extends, and benchmarks the high-performance patches from
 
 ## ⚡ Executive Summary: Verified Peak Records
 
-| Workload Metric | v0.3.6.3 Baseline | TensorFold 0.6.0 Stock | **Our 0.6.1 Winning Stack** | Delta vs Baseline |
+| Workload Metric | v0.3.6.3 Baseline | TensorFold 0.6.0 Stock | **Our 0.6.2 Vision Stack** | Delta vs Baseline |
 |---|---|---|---|---|
-| **Prefill Throughput (16k context)** | ~2,340 tok/s | 2,583 tok/s | **2,821.0 tok/s** (sparkDash) / **2,806 tok/s** | **+20.6%** |
-| **Prefill Throughput (32k context)** | ~2,440 tok/s | 2,574 tok/s | **2,805.9 tok/s** (11.69s) | **+15.0%** |
-| **Edit $\times 5$ Decode (Harness)** | ~180.0 agg tok/s | 226.8 agg tok/s | **324.6 agg tok/s** (94.0% accept) | **+80.3%** |
-| **Code $\times 5$ Decode (Harness)** | 136.2 agg tok/s | 192.4 agg tok/s | **312.6 – 319.2 agg tok/s** (79.0% accept) | **+134.4%** |
-| **Code $\times 5$ Decode (sparkDash)** | 136.2 agg tok/s | 192.4 agg tok/s | **193.3 agg tok/s** (41.4 tok/s / stream) | **+41.9%** |
-| **Structured $\times 5$ Decode (sparkDash)** | 158.0 agg tok/s | 205.6 agg tok/s | **206.6 agg tok/s** (56.9 tok/s / stream) | **+30.8%** |
+| **Prefill Throughput (16k context)** | ~2,340 tok/s | 2,583 tok/s | **2,827.2 tok/s** (4.54s) | **+20.8%** |
+| **Prefill Throughput (32k context)** | ~2,440 tok/s | 2,574 tok/s | **2,815.6 tok/s** (9.03s) | **+15.4%** |
+| **Prefill Throughput (64k context)** | ~2,410 tok/s | 2,556 tok/s | **2,745.1 tok/s** (18.45s) | **+13.9%** |
+| **Edit $\times 5$ Decode (Harness)** | ~180.0 agg tok/s | 226.8 agg tok/s | **328.2 agg tok/s** (94.0% accept) | **+82.3%** |
+| **Code $\times 5$ Decode (Harness)** | 136.2 agg tok/s | 192.4 agg tok/s | **324.7 agg tok/s** (66.5 tok/s / str) | **+138.4%** |
+| **Prose $\times 5$ Decode (Harness)** | 121.9 agg tok/s | 134.3 agg tok/s | **190.3 agg tok/s** (38.5 tok/s / str) | **+56.1%** |
 | **Structured $\times 1$ Solo Decode** | 87.3 tok/s | 123.6 tok/s | **121.8 tok/s** (67 ms TTFT) | **+39.5%** |
+| **Vision & Video Support** | Unsupported | Unsupported | **Verified (50 images, PyAV video)** | First-class multimodal |
 | **Solo Prose TTFT** | 142 ms | 60 ms | **60 ms** | **-57.7%** |
 | **Multi-turn Agent Resume TTFT** | ~10,200 ms (evicted) | ~9,800 ms (evicted) | **~80 ms** (hot cache hit) | **~120x faster** |
-| **Token Bit-Parity** | 100% | 100% | **100% Bit-Identical** | Zero divergence |
-
+| **Token Bit-Parity** | 100% | 100% | **100% Bit-Identical** (12/12) | Zero divergence |
 ---
 
 ## 👥 Credits & Acknowledgments
@@ -36,8 +36,7 @@ This project builds directly on the foundational work of:
 
 ## 🛠️ Architecture & What Was Changed in 0.6.2
 
-Upstream TensorFold 0.6.2 added major enhancements, but Mia's custom DGX Spark optimizations and our zero-copy multi-stream fixes were missing from the stock release. We re-based and combined the entire stack into `v062-concurrent.patch`:
-
+Upstream TensorFold 0.6.2 added major enhancements (SM 12.0 tree kernel, grouped drafter projections, socket disconnect polling). We combined upstream's native Flash-Next vision tower with Mia's 50-image and video support and our zero-copy multi-stream speed fixes into `v062-concurrent-vision.patch`:
 ### 1. Coalesced Waiting Prompt Prefill & Fused Normalization (Upstream 0.6.1)
 * **What it does:** In `--parallel 5`, waiting prompts that arrive concurrently now share one prefill forward: projections and MLPs execute over every waiting prompt's rows together, while convolutions and DeltaNet update per-stream state. Hyper-connection write-backs and RMSNorm run as a fused kernel.
 * **Impact:** Prefill sustained past **2,820 tok/s**, cutting 1.6s off 50k prompt TTFT.
@@ -160,7 +159,9 @@ export MTP_CONFIDENCE=0.65              # Peak confidence for structured/code ta
 export MTP_DRAFTS=6                     # Preserves code syntax draft acceptance
 export KV_DTYPE=int8                    # int8 avoids int4 speculative divergence
 export PLE_ON_SSD=1                     # Retains MLX 4-bit weights with SSD n-gram tables
-```
+export VISION=1                         # Enables native 0.84 GiB Flash-Next vision tower
+export VISION_MAX_IMAGES=50             # Up to 50 images per request (16,384 shared tokens)
+export MAX_TOKENS=32768                 # 32k reply limit prevents cutting off reasoning chains
 
 ---
 
@@ -178,9 +179,9 @@ cd qwen3.8-flash-next-tensorfold-spark
 ```
 
 ### Step 2: Build Image
-Builds TensorFold 0.6.2 with `v062-concurrent.patch` applied:
+Builds TensorFold 0.6.2 with `v062-concurrent-vision.patch` applied:
 ```bash
-docker build -t tensorfold-qwen38:v0.6.2-concurrent .
+docker build -t tensorfold-qwen38:v0.6.2-concurrent-vision .
 ```
 
 ### Step 3: Launch Production Server

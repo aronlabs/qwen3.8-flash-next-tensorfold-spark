@@ -1,0 +1,1053 @@
+diff --git tensorfold/cuda/geometry.py tensorfold/cuda/geometry.py
+index bdb4dc6..6e4d6bf 100644
+--- tensorfold/cuda/geometry.py
++++ tensorfold/cuda/geometry.py
+@@ -14,6 +14,19 @@ MLA_PROMPT_ATT_ROWS = 512   # GLM's prompt-chunk rows one dense latent attention
+ MLA_SELECT_ROWS = 512       # GLM's prompt-chunk rows whose pool scores are held at once (sparse.SELECT_ROWS)
+ 
+ 
++
++def indexed_prefill_rows() -> int:
++    """Flash Next's prompt chunk rows on MLX and NVFP4 checkpoints: PREFILL_ROWS, or TENSORFOLD_PREFILL_ROWS (256 to
++    16,384; EXL3 packs keep PREFILL_ROWS). A row's bits never depend on its chunk: wider chunks prefill long prompts
++    faster and take more memory, which on a unified-memory GPU the n-gram tables' page cache may need."""
++
++    import os
++    rows = int(os.environ.get("TENSORFOLD_PREFILL_ROWS") or PREFILL_ROWS)
++    if not 256 <= rows <= 16384:
++        raise ValueError(f"TENSORFOLD_PREFILL_ROWS: 256 to 16,384 rows, not {rows}")
++    return rows
++
++
+ def size(info: dict, name: str = "tensor") -> int:
+     return math.prod(info["shape"]) * itemsize(info, name)
+ 
+diff --git tensorfold/cuda/http.py tensorfold/cuda/http.py
+index de0ea85..6c29771 100644
+--- tensorfold/cuda/http.py
++++ tensorfold/cuda/http.py
+@@ -116,9 +116,9 @@ def make_handler(app: App):
+                 return self._json(404, {"error": "not found"})
+             try:
+                 length = int(self.headers.get("Content-Length", 0))
+-                if not 0 <= length <= 32 * 1024**2:
++                if not 0 <= length <= 96 * 1024**2:
+                     self.close_connection = True             # the unread body must not reach the next request
+-                    return self._json(400, {"error": {"message": "request body exceeds the 32 MiB limit",
++                    return self._json(400, {"error": {"message": "request body exceeds the 96 MiB limit",
+                                                       "type": "invalid_request_error"}})
+                 body = json.loads(self.rfile.read(length) or b"{}")
+             except (json.JSONDecodeError, UnicodeDecodeError):
+diff --git tensorfold/cuda/kernels/gdn.py tensorfold/cuda/kernels/gdn.py
+index 1e09141..e233577 100644
+--- tensorfold/cuda/kernels/gdn.py
++++ tensorfold/cuda/kernels/gdn.py
+@@ -103,6 +103,13 @@ def plan_host(streams: Sequence[Sequence[int]]) -> tuple[list[int], list[int], i
+ def to_device(values: Sequence[int], dtype: torch.dtype, device) -> torch.Tensor:
+     """One pinned, non-blocking host-to-device copy (the caching host allocator keeps the buffer until it lands)."""
+ 
++    import numpy as np
++
++    if isinstance(values, np.ndarray):
++        t = torch.from_numpy(np.ascontiguousarray(values))
++        if t.dtype != dtype:
++            t = t.to(dtype)
++        return t.pin_memory().to(device, non_blocking=True)
+     return torch.tensor(values, dtype=dtype).pin_memory().to(device, non_blocking=True)
+ 
+ 
+diff --git tensorfold/families/qwen4_exp/cuda/attn_multi.py tensorfold/families/qwen4_exp/cuda/attn_multi.py
+index 9143c45..09ab02c 100644
+--- tensorfold/families/qwen4_exp/cuda/attn_multi.py
++++ tensorfold/families/qwen4_exp/cuda/attn_multi.py
+@@ -104,10 +104,11 @@ class Step:
+                 ptrs[i, :, s] = [kc.k.data_ptr(), kc.v.data_ptr(), kc.ks.data_ptr(), kc.vs.data_ptr(),
+                                  ikc.data_ptr(), pooled.data_ptr()]
+         dev = w.device
+-        ints = shared.to_device(np.concatenate([posr, sid, first, counts]).tolist(), torch.int32, dev)
++        first_arr, counts_arr = np.asarray(first, dtype=np.int32), np.asarray(counts, dtype=np.int32)
++        ints = shared.to_device(np.concatenate([posr, sid, first_arr, counts_arr]), torch.int32, dev)
+         self.posr, self.sid = ints[:rows], ints[rows:2 * rows]
+         self.first, self.counts = ints[2 * rows:2 * rows + n], ints[2 * rows + n:]
+-        self.ptrs = shared.to_device(ptrs.ravel().tolist(), torch.int64, dev).view(len(layers), PTRS * n)
++        self.ptrs = shared.to_device(ptrs.ravel(), torch.int64, dev).view(len(layers), PTRS * n)
+         self.n, self.rows, self.segs = n, rows, list(segs)
+         self.ends = [p0 + c for p0, c in zip(first, counts)]
+         self.most = max(counts)
+diff --git tensorfold/families/qwen4_exp/cuda/decode.py tensorfold/families/qwen4_exp/cuda/decode.py
+index 966ebfa..f31f61d 100644
+--- tensorfold/families/qwen4_exp/cuda/decode.py
++++ tensorfold/families/qwen4_exp/cuda/decode.py
+@@ -15,7 +15,7 @@ from tensorfold.cuda.sampling import comm_gather, nucleus_rows, sample_rows
+ from tensorfold.engine.exact_sampling import MARGIN, Sampling, choose_rows
+ 
+ from . import CONFIDENCE, DEPTH
+-from .forward import Cut, commit, cut_snapshot, forward
++from .forward import Cut, commit, compute, cut_snapshot, forward, history_after, read_ahead, stage
+ from . import image_rows
+ from .state import CAND, Buffers, State
+ from .mtp import mtp_forward
+@@ -293,7 +293,10 @@ def prefill_chunk(e: Engine, prompt: Sequence[int], start: int, *, mtp: bool = T
+     point = keep_at - start if keep_at is not None and start < keep_at <= end else 0     # the kept point's row
+     cut = Cut(point) if 0 < point < R else None           # inside the chunk, not at its end
+     # only the prompt's last row is sampled: the head runs on the final chunk alone
+-    logits = forward(w, st, pb, chunk, logits=final, cut=cut)
++    segs = stage(w, pb, [(st, chunk)])
++    if not final:                # the next chunk's n-gram rows are read while the GPU runs this one
++        read_ahead(w, [(history_after(w, st.ple_history, chunk), prompt[end:end + e.prefill_rows])])
++    logits = compute(w, segs, pb, logits=final, cuts=() if cut is None else (cut,))
+     last = logits.clone() if final else None
+     e.last_streams = pb.streams[R - 1:R].clone()
+     use_mtp = _absorbs(e, mtp)
+diff --git tensorfold/families/qwen4_exp/cuda/engine.py tensorfold/families/qwen4_exp/cuda/engine.py
+index 3b51db2..19faced 100644
+--- tensorfold/families/qwen4_exp/cuda/engine.py
++++ tensorfold/families/qwen4_exp/cuda/engine.py
+@@ -57,7 +57,7 @@ class FlashNextEngine:
+         from .kvcache import BITS_OF, check as check_kv
+         from .weights import draft_token_ids, load
+         from tensorfold.cuda.capacity import admit, config, gather_ints
+-        from tensorfold.cuda.geometry import PREFILL_ROWS, gdn_geometry, indexed_stream_geometry, indexed_weights
++        from tensorfold.cuda.geometry import PREFILL_ROWS, gdn_geometry, indexed_stream_geometry, indexed_weights, indexed_prefill_rows
+ 
+         if tp not in (1, 2) or rank not in range(tp):
+             raise ValueError(f"rank {rank} of {tp}: Flash Next runs on one GPU or two")
+@@ -84,10 +84,11 @@ class FlashNextEngine:
+         gather = (lambda values: gather_ints(torch, self.comm.all_gather, values)) if tp == 2 else None
+         each, mtp, bits = self.depth + 1, self.depth > 0, BITS_OF[self.kv_dtype]
+         # one admission for one stream or many (every slot, the shared rows and kept snapshots), before any load
+-        geometry = ((lambda text: indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits))
++        rows_geom = PREFILL_ROWS if exl3 else indexed_prefill_rows()
++        geometry = ((lambda text: indexed_stream_geometry(text, streams, each, KEEP, mtp=mtp, kv_bits=bits, prefill_rows=rows_geom))
+                     if streams > 1 else
+                     (lambda text: gdn_geometry(text, tp, each, indexed=True, mtp=mtp, kv_bits=bits,
+-                                               kept=KEEP_SERIAL + 1)))
++                                               kept=KEEP_SERIAL + 1, prefill_rows=rows_geom)))
+         if exl3:
+             geometry = admission(geometry)
+         from tensorfold.vision.qwen_cuda import capacity_geometry, weight_transform as vision_weights
+@@ -101,6 +102,9 @@ class FlashNextEngine:
+         self.prefill_rows, prompt_workspace = (PREFILL_ROWS, 0) if exl3 else prompt_plan(
+             self.capacity_plan, config(model_dir), torch.cuda.get_device_capability(), world=tp, vision=vision,
+             fp8=prompt_precision.fp8())
++        env_prefill = indexed_prefill_rows() if not exl3 else PREFILL_ROWS
++        if env_prefill != PREFILL_ROWS:
++            self.prefill_rows = env_prefill
+         if prompt_workspace:
+             peak = self.capacity_plan["total_bytes_estimate"] / 2**30
+             print(f"[tensorfold] {self.prefill_rows}-row idle prompt workspace {prompt_workspace / 2**30:.2f} GiB; "
+@@ -196,7 +200,9 @@ class FlashNextEngine:
+                  f"{self.multi.window_bytes / 2**30:.2f} GiB for one at the full window), eager" if self.concurrent else
+                  f"{self.context_window}-token prompt/reply window; {self.max_len}-token cache")
+         if ple_on_ssd:
+-            how = "read from SSD at each lookup"
++            from .ssd_read import native_reader
++            how = (f"read from SSD at each lookup ({'native' if native_reader() is not None else 'Python'} reader, "
++                   f"prompt rows read ahead)")
+         elif tables_read:                             # read during the load: the wait after it, then any lock
+             how = f"read alongside the weights ({waited:.1f}s after them)" + (
+                 f", locked in memory in {read_s:.1f}s" if locked else "")
+diff --git tensorfold/families/qwen4_exp/cuda/forward.py tensorfold/families/qwen4_exp/cuda/forward.py
+index 4cc4f52..76974f0 100644
+--- tensorfold/families/qwen4_exp/cuda/forward.py
++++ tensorfold/families/qwen4_exp/cuda/forward.py
+@@ -471,6 +471,31 @@ def stage(w: Weights, b: Buffers, windows: Sequence[tuple[State, Sequence[int]]]
+     return segs
+ 
+ 
++
++def read_ahead(w: Weights, windows: Sequence[tuple[np.ndarray | None, Sequence[int]]]) -> None:
++    """Start reading the n-gram rows a later ``stage`` of each (history, tokens) looks up, where a table reads ahead
++    (``--ple-on-ssd``): the same bytes, read on a thread while the GPU runs the current forward."""
++
++    if w.x3 is not None:
++        return
++    for layer in w.layers:
++        p = layer.ple
++        start = getattr(p.table, "read_ahead", None) if p is not None else None
++        if start is None:
++            continue
++        for history, tokens in windows:
++            if len(tokens):
++                start(p.ngram.ids(history, np.asarray(tokens, dtype=np.int64)))
++
++
++def history_after(w: Weights, history: np.ndarray | None, tokens: Sequence[int]) -> np.ndarray | None:
++    """The n-gram history once ``tokens`` follow ``history`` (as ``commit`` leaves it after keeping them all)."""
++
++    if history is None:
++        return None
++    return np.concatenate([history, np.asarray(tokens, dtype=np.int64)])[-(w.cfg.ngram_size - 1):]
++
++
+ def compute(w: Weights, segs: Sequence[Seg], b: Buffers, *, logits: bool = True, context: int | None = None,
+             ends: Sequence[int] = (), cuts: Sequence[Cut] = (), features=None):
+     """The forward's GPU work on staged rows (capturable); ``context`` bounds attention, ``ends`` get the head, ``cuts`` keep states."""
+diff --git tensorfold/families/qwen4_exp/cuda/gdn_multi.py tensorfold/families/qwen4_exp/cuda/gdn_multi.py
+index aa2a788..591a7ed 100644
+--- tensorfold/families/qwen4_exp/cuda/gdn_multi.py
++++ tensorfold/families/qwen4_exp/cuda/gdn_multi.py
+@@ -53,8 +53,8 @@ class Tables:
+                 ptrs[0, li, s] = st.conv[li].data_ptr()
+                 ptrs[1, li, s] = st.rec[st.cur[li], li].data_ptr()
+         dev = w.device
+-        i32 = shared.to_device(ints.tolist(), torch.int32, dev)
+-        i64 = shared.to_device(ptrs.ravel().tolist(), torch.int64, dev)
++        i32 = shared.to_device(ints, torch.int32, dev)
++        i64 = shared.to_device(ptrs.ravel(), torch.int64, dev)
+         self.sid, self.win = i32[:rows], i32[rows:5 * rows].view(rows, 4)
+         at = 8 * rows + n + 1
+         self.plan = shared.Plan(i32[5 * rows:8 * rows].view(rows, 3), i32[8 * rows:at], slots, most)
+diff --git tensorfold/families/qwen4_exp/cuda/multi.py tensorfold/families/qwen4_exp/cuda/multi.py
+index 86833fd..e382fd3 100644
+--- tensorfold/families/qwen4_exp/cuda/multi.py
++++ tensorfold/families/qwen4_exp/cuda/multi.py
+@@ -19,7 +19,7 @@ from tensorfold.engine.grammar import GrammarError
+ 
+ from .decode import PREFILL_ROWS, WARM_TAIL, Engine, draft, entry_end, prefill_begin
+ from . import attn_multi, gdn_multi, image_rows, prefixes
+-from .forward import Cut, commit, compute, compute_mixed, converges, cut_snapshot, stage
++from .forward import Cut, commit, compute, compute_mixed, converges, cut_snapshot, history_after, read_ahead, stage
+ from .mtp import mtp_compute, mtp_stage
+ from .prompt_plan import pass_limit
+ from .state import ENDS, Buffers, State
+@@ -29,6 +29,7 @@ FIRST, STEP = 256, 8192          # rows an idle slot keeps; rows a stream's cach
+ GIB = 1024**3
+ SHARE = 0.0                      # --decode-share: a round alone takes this share of its pass's time (0: whole passes)
+ PASS_MIN = 128                   # the fewest prompt rows a round's pass takes
++READ_AHEAD = 2                   # prompt pieces of the next pass whose n-gram rows are read ahead (ReadAhead.depth)
+ FILL_GUARD = 8                   # a prompt passed over this many passes takes the next one (no starvation), as on Macs
+ 
+ 
+@@ -268,6 +269,27 @@ class MultiDecoder:
+             room -= n
+         return pieces
+ 
++
++    def _read_ahead(self, pieces, rows: int) -> None:
++        """Start reading the n-gram rows of the pass likely to follow this one (tables that read ahead, from SSD)
++        while the GPU runs this one; a wrong guess only costs the reads."""
++
++        after = {s.sid: a + n for s, a, n in pieces}
++        windows, room = [], rows
++        for s in sorted(self.filling, key=lambda x: x.background):
++            start = after.get(s.sid, self.fills[s.sid][2])
++            n = min(len(s.prompt) - start, room)
++            if n <= 0:
++                continue
++            staged = s.st.ple_last if s.sid in after else None        # this pass's piece, not committed yet
++            history = history_after(self.w, *staged) if staged is not None else s.st.ple_history
++            windows.append((history, s.prompt[start:start + n]))
++            room -= n
++            if room <= 0 or len(windows) == READ_AHEAD:
++                break
++        if windows:
++            read_ahead(self.w, windows)
++
+     def _pass(self) -> list[Stream]:
+         """One prompt pass alone; prompts that end sample their first token, draft and join the rounds."""
+ 
+@@ -276,6 +298,7 @@ class MultiDecoder:
+         t0 = time.perf_counter()
+         try:
+             segs = stage(self.w, self.pbuf, [(s.st, s.prompt[a:a + n]) for s, a, n in pieces])
++            self._read_ahead(pieces, self.prefill_rows)
+             ends, cuts = self._end_rows(pieces, segs), self._cuts(pieces, segs)
+             logits = compute(self.w, segs, self.pbuf, logits=bool(ends), ends=ends, cuts=cuts)
+             heads = logits[:len(ends)].clone() if ends else None
+@@ -433,6 +456,7 @@ class MultiDecoder:
+             try:
+                 psegs = stage(self.w, self.pbuf, [(s.st, s.prompt[a:a + n]) for s, a, n in pieces])
+                 cuts = self._cuts(pieces, psegs)
++                self._read_ahead(pieces, self._pass_rows())
+             except Exception as exc:                     # noqa: BLE001  (the pass's requests fail, the round goes on)
+                 ended += self._failed(pieces, exc)
+                 pieces = []
+@@ -544,6 +568,17 @@ class MultiDecoder:
+         """Each row's keyed draft and its probability at temperature 1, one read-back (drafts change speed only)."""
+ 
+         row = logits.float()
++        if all(s is None or s.temperature <= 0 for s in samplings):
++            top, col = row.max(dim=-1)
++            lse = torch.logsumexp(row, dim=-1)
++            col_cpu = col.cpu().numpy()
++            prob_cpu = torch.exp(top - lse).cpu().numpy()
++            out = []
++            for i in range(len(positions)):
++                c = int(col_cpu[i])
++                tok = int(self.draft_host[c]) if self.draft_host is not None else c
++                out.append((tok, float(prob_cpu[i])))
++            return out
+         k = max([int(s.top_k) + MARGIN for s in samplings if s is not None and s.temperature > 0 and s.top_k] or [1])
+         k = min(k, row.shape[1])
+         vals, idx = torch.topk(row, k, dim=-1, sorted=False)
+diff --git tensorfold/families/qwen4_exp/cuda/prompt_plan.py tensorfold/families/qwen4_exp/cuda/prompt_plan.py
+index c17f6b9..c1840c4 100644
+--- tensorfold/families/qwen4_exp/cuda/prompt_plan.py
++++ tensorfold/families/qwen4_exp/cuda/prompt_plan.py
+@@ -2,7 +2,8 @@
+ 
+ from tensorfold.cuda.geometry import PREFILL_ROWS, indexed_prompt_bytes
+ 
+-IDLE_ROWS = 4096
++import os
++IDLE_ROWS = int(os.environ.get("TENSORFOLD_PREFILL_ROWS") or 4096)
+ 
+ 
+ def choose(receipt: dict, text: dict, capability: tuple[int, int], *, world: int = 1,
+@@ -32,7 +33,8 @@ def pass_limit(rows: int, live: bool, share: float, round_s: float | None, row_s
+                minimum: int = 128) -> int:
+     """Live replies retain the released pass bound; an idle decoder can use its full prompt workspace."""
+ 
+-    limit = min(rows, PREFILL_ROWS) if live else rows
++    env_rows = int(os.environ.get("TENSORFOLD_PREFILL_ROWS") or 0)
++    limit = (min(rows, env_rows or PREFILL_ROWS) if live else rows)
+     if not live or share <= 0 or not round_s or not row_s:
+         return limit
+     chosen = int(round_s / (share * row_s)) // 64 * 64
+diff --git tensorfold/families/qwen4_exp/cuda/ssd_read.cpp tensorfold/families/qwen4_exp/cuda/ssd_read.cpp
+new file mode 100644
+index 0000000..2c70d87
+--- /dev/null
++++ tensorfold/families/qwen4_exp/cuda/ssd_read.cpp
+@@ -0,0 +1,139 @@
++// Flash Next's n-gram rows from the checkpoint: a batch of preads on a persistent pool of threads, without the GIL.
++#include <torch/extension.h>
++
++#include <unistd.h>
++
++#include <algorithm>
++#include <atomic>
++#include <cerrno>
++#include <condition_variable>
++#include <cstring>
++#include <mutex>
++#include <stdexcept>
++#include <string>
++#include <thread>
++#include <vector>
++
++namespace {
++
++class Pool {
++ public:
++  ~Pool() {
++    {
++      std::lock_guard<std::mutex> lock(m_);
++      stop_ = true;
++    }
++    wake_.notify_all();
++    for (auto& t : threads_) t.join();
++  }
++
++  // Each row of ``reads`` (fd, offset, size, at): ``size`` bytes at ``offset`` of ``fd`` into ``out + at``.
++  void run(const int64_t* reads, int64_t n, uint8_t* out, int64_t threads) {
++    std::lock_guard<std::mutex> call(call_);          // one batch at a time
++    int64_t helpers = std::max<int64_t>(0, std::min<int64_t>(threads, n) - 1);
++    {
++      std::unique_lock<std::mutex> lock(m_);
++      while (static_cast<int64_t>(threads_.size()) < helpers) threads_.emplace_back([this] { loop(); });
++      reads_ = reads;
++      n_ = n;
++      out_ = out;
++      next_.store(0);
++      error_.clear();
++      busy_ = static_cast<int>(threads_.size());
++      ++generation_;
++    }
++    wake_.notify_all();
++    work();
++    std::unique_lock<std::mutex> lock(m_);
++    done_.wait(lock, [this] { return busy_ == 0; });
++    if (!error_.empty()) throw std::runtime_error(error_);
++  }
++
++ private:
++  void loop() {
++    uint64_t seen = 0;
++    {
++      std::lock_guard<std::mutex> lock(m_);
++      seen = generation_;           // a thread started for a batch joins it below
++      --seen;
++    }
++    for (;;) {
++      {
++        std::unique_lock<std::mutex> lock(m_);
++        wake_.wait(lock, [&] { return stop_ || generation_ != seen; });
++        if (stop_) return;
++        seen = generation_;
++      }
++      work();
++      std::lock_guard<std::mutex> lock(m_);
++      if (--busy_ == 0) done_.notify_all();
++    }
++  }
++
++  void work() {
++    for (;;) {
++      int64_t i = next_.fetch_add(1);
++      if (i >= n_) return;
++      const int64_t* r = reads_ + 4 * i;
++      int fd = static_cast<int>(r[0]);
++      int64_t offset = r[1], size = r[2], done = 0;
++      uint8_t* dst = out_ + r[3];
++      while (done < size) {
++        ssize_t got = pread(fd, dst + done, static_cast<size_t>(size - done), offset + done);
++        const int err = errno;          // before anything else (the lock below) can change it
++        if (got < 0 && err == EINTR) continue;
++        if (got <= 0) {
++          std::lock_guard<std::mutex> lock(m_);
++          if (error_.empty()) {
++            error_ = got == 0 ? "short read of the n-gram tables at byte " + std::to_string(offset + done) +
++                                    ": the checkpoint changed"
++                              : std::string("reading the n-gram tables: ") + std::strerror(err);
++          }
++          next_.store(n_);            // the rest of the batch is abandoned
++          return;
++        }
++        done += got;
++      }
++    }
++  }
++
++  std::mutex call_, m_;
++  std::condition_variable wake_, done_;
++  std::vector<std::thread> threads_;
++  const int64_t* reads_ = nullptr;
++  int64_t n_ = 0;
++  uint8_t* out_ = nullptr;
++  std::atomic<int64_t> next_{0};
++  std::string error_;
++  int busy_ = 0;
++  uint64_t generation_ = 0;
++  bool stop_ = false;
++};
++
++Pool& pool() {
++  static Pool* p = new Pool();      // never destroyed: its threads may outlive interpreter teardown
++  return *p;
++}
++
++void read_rows(torch::Tensor reads, torch::Tensor out, int64_t threads) {
++  TORCH_CHECK(reads.device().is_cpu() && reads.scalar_type() == torch::kInt64 && reads.dim() == 2 &&
++                  reads.size(1) == 4 && reads.is_contiguous(),
++              "reads must be a contiguous CPU int64 [n, 4] tensor");
++  TORCH_CHECK(out.device().is_cpu() && out.scalar_type() == torch::kUInt8 && out.is_contiguous(),
++              "out must be a contiguous CPU uint8 tensor");
++  const int64_t n = reads.size(0), cap = out.numel();
++  const int64_t* r = reads.data_ptr<int64_t>();
++  for (int64_t i = 0; i < n; ++i) {
++    TORCH_CHECK(r[4 * i + 2] >= 0 && r[4 * i + 3] >= 0 && r[4 * i + 3] + r[4 * i + 2] <= cap && r[4 * i + 1] >= 0,
++                "a read lands outside the output");
++  }
++  if (n == 0) return;
++  pybind11::gil_scoped_release nogil;
++  pool().run(r, n, out.data_ptr<uint8_t>(), std::max<int64_t>(1, threads));
++}
++
++}  // namespace
++
++PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
++  m.def("read_rows", &read_rows, "preads (fd, offset, size, at) into out, on up to `threads` threads, GIL released");
++}
+diff --git tensorfold/families/qwen4_exp/cuda/ssd_read.py tensorfold/families/qwen4_exp/cuda/ssd_read.py
+new file mode 100644
+index 0000000..f5bb039
+--- /dev/null
++++ tensorfold/families/qwen4_exp/cuda/ssd_read.py
+@@ -0,0 +1,37 @@
++"""The SSD n-gram reader's native path: a batch of preads on C++ threads, the GIL released (``ssd_read.cpp``)."""
++
++from __future__ import annotations
++
++import os
++from functools import lru_cache
++from pathlib import Path
++
++import numpy as np
++
++
++@lru_cache(maxsize=1)
++def _ext():
++    from tensorfold.cuda.build import load
++
++    return load(name="tensorfold_qwen4_exp_ssd_read", sources=[str(Path(__file__).parent / "ssd_read.cpp")],
++                extra_cflags=["-O2"], verbose=False)
++
++
++@lru_cache(maxsize=1)
++def native_reader():
++    """``SSDTable``'s ``native`` reader, or None where the extension does not build (TENSORFOLD_SSD_NATIVE=0: None)."""
++
++    if os.environ.get("TENSORFOLD_SSD_NATIVE", "1") == "0":
++        return None
++    try:
++        ext = _ext()
++    except Exception as exc:                                  # no compiler: the Python reader
++        print(f"[tensorfold] n-gram SSD reads stay on Python threads (the native reader did not build: {exc})",
++              flush=True)
++        return None
++    import torch
++
++    def read(reads: np.ndarray, out: np.ndarray, threads: int) -> None:
++        ext.read_rows(torch.from_numpy(np.ascontiguousarray(reads, dtype=np.int64)), torch.from_numpy(out), threads)
++
++    return read
+diff --git tensorfold/families/qwen4_exp/cuda/weights.py tensorfold/families/qwen4_exp/cuda/weights.py
+index 5159a73..4aea509 100644
+--- tensorfold/families/qwen4_exp/cuda/weights.py
++++ tensorfold/families/qwen4_exp/cuda/weights.py
+@@ -7,7 +7,8 @@ from pathlib import Path
+ import numpy as np
+ import torch
+ 
+-from ..host_table import open_table, shard_keys
++from ..host_table import ReadAhead, open_table, shard_keys
++from .ssd_read import native_reader
+ from .bf16 import b16_from_rows, quantize4, stack_b16
+ from tensorfold.cuda import experts as grouped
+ 
+@@ -354,7 +355,9 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
+                     raw(base + "ngram_heads_vocab_sizes").cpu().numpy())
+         keys = shard_keys(prefix + base + "ngram_embedding", cfg.ngram_shards, rd.where)
+         table = open_table(model_dir, [(rd.where[k + ".weight"], k) for k in keys],
+-                           lambda n: table_scale(base, n), ssd=ple_on_ssd)
++                           lambda n: table_scale(base, n), ssd=ple_on_ssd, native=native_reader() if ple_on_ssd else None)
++        if ple_on_ssd:              # from SSD, a prompt pass's rows are read on a thread while the GPU runs the one before
++            table = ReadAhead(table)
+         if table.rows != ngram.rows:
+             raise ValueError(f"n-gram tables hold {table.rows} rows, expected {ngram.rows}")
+         if table_reads is not None and not ple_on_ssd:     # its pages come in while the weights load
+diff --git tensorfold/families/qwen4_exp/host_table.py tensorfold/families/qwen4_exp/host_table.py
+index 02c26d7..b054209 100644
+--- tensorfold/families/qwen4_exp/host_table.py
++++ tensorfold/families/qwen4_exp/host_table.py
+@@ -301,7 +301,7 @@ def shard_keys(name: str, count: int, names) -> list[str]:
+                   if key + ".weight" in names), f"{name}.shard_{i}") for i in range(count)]
+ 
+ 
+-def open_table(model_dir: Path, shards: list[tuple[str, str]], scale, *, ssd: bool = False):
++def open_table(model_dir: Path, shards: list[tuple[str, str]], scale, *, ssd: bool = False, native=None):
+     """The n-gram table in its shards' layout (MLX 4-bit, bf16, FP8, NVFP4); ``scale(name)`` reads a table scale."""
+ 
+     headers: dict[str, dict] = {}
+@@ -326,7 +326,7 @@ def open_table(model_dir: Path, shards: list[tuple[str, str]], scale, *, ssd: bo
+         return NVFP4Table(files, scale("weight_scale_2"))
+     if used[0] == "fp8":
+         return FP8Table(files, scale("weight_scale"))
+-    table = BF16Table(files) if used[0] == "bf16" else SSDTable(files) if ssd else HostTable(files)
++    table = BF16Table(files) if used[0] == "bf16" else SSDTable(files, native=native) if ssd else HostTable(files)
+     table.weight_scale = float(scale("weight_scale"))
+     return table
+ 
+diff --git tensorfold/families/qwen4_exp/ssd_table.py tensorfold/families/qwen4_exp/ssd_table.py
+index aae4ad1..97dd3b7 100644
+--- tensorfold/families/qwen4_exp/ssd_table.py
++++ tensorfold/families/qwen4_exp/ssd_table.py
+@@ -12,6 +12,7 @@ from pathlib import Path
+ import numpy as np
+ 
+ WORKERS = 16                # reads in flight at once: os.pread releases the GIL
++NATIVE_WORKERS = 64         # the native reader's threads hold no GIL: the NVMe's deep queue, no cost to the caller
+ MAX_READ = 1 << 20          # bytes one read of adjacent rows may cover
+ _KINDS = (("weight", "U32", 4), ("scales", "BF16", 2), ("biases", "BF16", 2))
+ 
+@@ -64,7 +65,8 @@ def _fill(reads: list[tuple[int, int, int, memoryview, int]]) -> None:
+ class SSDTable:
+     """HostTable's rows, byte for byte, read from the checkpoint at each gather: deduplicated, coalesced, parallel."""
+ 
+-    def __init__(self, files: list[tuple[Path, dict, dict, dict]], *, nocache: bool = True) -> None:
++    def __init__(self, files: list[tuple[Path, dict, dict, dict]], *, nocache: bool = True, native=None) -> None:
++        self._native = native
+         self._fds: list[int] = []
+         self._pool = ThreadPoolExecutor(WORKERS, thread_name_prefix="ple-ssd")
+         self._closer = weakref.finalize(self, _release, self._fds, self._pool)
+@@ -125,6 +127,8 @@ class SSDTable:
+         unique, inverse = np.unique(flat.astype(np.int64), return_inverse=True)
+         shard = np.searchsorted(self.starts, unique, side="right") - 1
+         local, where = unique - self.starts[shard], self.fidx[shard]
++        if self._native is not None:
++            return self._gather_native(unique.size, inverse, shard, local, where)
+         outs, reads = [], []
+         for part, width in enumerate((self.wrow, self.grow, self.grow)):
+             outs.append(np.empty((unique.size, width), dtype=np.uint8))
+@@ -137,6 +141,36 @@ class SSDTable:
+         words, scales, biases = (out[inverse] for out in outs)
+         return words.view(np.uint32), scales.view(np.uint16), biases.view(np.uint16)
+ 
++
++    def _gather_native(self, n: int, inverse, shard, local, where) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++        """The same runs as ``_reads``, listed as one array and read by ``native`` into one buffer."""
++
++        widths = (self.wrow, self.grow, self.grow)
++        buf = np.empty(n * sum(widths), dtype=np.uint8)
++        runs, at = [], 0
++        for part, width in enumerate(widths):
++            runs.append(self._runs(where, self.bases[shard, part] + local * width, width, at))
++            at += n * width
++        self._native(np.concatenate(runs), buf, NATIVE_WORKERS)
++        words = buf[:n * self.wrow].reshape(n, self.wrow)
++        scales = buf[n * self.wrow:n * (self.wrow + self.grow)].reshape(n, self.grow)
++        biases = buf[n * (self.wrow + self.grow):].reshape(n, self.grow)
++        return (words[inverse].view(np.uint32), scales[inverse].view(np.uint16), biases[inverse].view(np.uint16))
++
++    def _runs(self, where: np.ndarray, offsets: np.ndarray, width: int, at: int) -> np.ndarray:
++        """``_reads`` as rows (fd, offset, size, at) of an int64 array, row i of the part landing at ``at + i * width``."""
++
++        n = offsets.size
++        if not n:
++            return np.zeros((0, 4), dtype=np.int64)
++        cut = np.ones(n, dtype=bool)
++        cut[1:] = (where[1:] != where[:-1]) | (offsets[1:] != offsets[:-1] + width)
++        first = np.flatnonzero(cut)
++        cut |= (np.arange(n) - first[np.cumsum(cut) - 1]) % max(1, MAX_READ // width) == 0
++        first = np.flatnonzero(cut)
++        rows = np.diff(first, append=n)
++        return np.stack([self._fd_of[where[first]], offsets[first], rows * width, at + first * width], axis=1)
++
+     def _reads(self, where: np.ndarray, offsets: np.ndarray, width: int, out: np.ndarray) -> list[tuple]:
+         """One read per run of rows adjacent in one file, each at most MAX_READ bytes, into ``out``'s rows."""
+ 
+diff --git tensorfold/server/messages.py tensorfold/server/messages.py
+index 24bbd82..dde2b67 100644
+--- tensorfold/server/messages.py
++++ tensorfold/server/messages.py
+@@ -28,6 +28,9 @@ def late_system_role(render: Callable[[list[dict[str, Any]]], Any]) -> str:
+         return "user"
+ 
+ 
++_VISUAL = ("image_url", "image", "video_url", "video")      # a video part reaches here only where videos are on
++
++
+ def normalize_messages(messages: list[dict[str, Any]], *, late_system: str = "system",
+                        allow_images: bool = False) -> list[dict[str, Any]]:
+     """Merge leading instructions as system text and retain later instructions as ``late_system`` so earlier conversation tokens stay unchanged."""
+@@ -45,12 +48,12 @@ def normalize_messages(messages: list[dict[str, Any]], *, late_system: str = "sy
+             raise RequestError("this server accepts text only; image, audio and video inputs are unsupported")
+         content = message.get("content")
+         if isinstance(content, list) and allow_images and any(
+-                isinstance(p, dict) and p.get("type") in ("image_url", "image") for p in content):
++                isinstance(p, dict) and p.get("type") in _VISUAL for p in content):
+             if role != "user":
+-                raise RequestError("images are supported only in user messages")
++                raise RequestError("images and videos are supported only in user messages")
+             for part in content:
+-                if not isinstance(part, dict) or part.get("type") not in ("text", "image_url", "image"):
+-                    raise RequestError("image messages may contain text and image_url parts only")
++                if not isinstance(part, dict) or part.get("type") not in ("text", *_VISUAL):
++                    raise RequestError("image messages may contain text and image_url (or video_url) parts only")
+                 if part["type"] == "text" and not isinstance(part.get("text"), str):
+                     raise RequestError("a text content part must contain a text string")
+             out.append({**message, "content": list(content)})
+diff --git tensorfold/server/prompts.py tensorfold/server/prompts.py
+index 3066ce5..c4d04f2 100644
+--- tensorfold/server/prompts.py
++++ tensorfold/server/prompts.py
+@@ -19,7 +19,7 @@ class RenderedPrompt:
+ 
+ def has_images(messages):
+     return any(isinstance(m, dict) and isinstance(m.get('content'), list)
+-               and any(isinstance(p, dict) and p.get('type') == 'image_url' for p in m['content'])
++               and any(isinstance(p, dict) and p.get('type') in ('image_url', 'video_url') for p in m['content'])
+                for m in messages or [])
+ 
+ 
+@@ -40,20 +40,37 @@ def image_slot():
+     return IMAGE_SLOTS
+ 
+ 
++def _image_tokens() -> int:
++    import os
++    return int(os.environ.get("TENSORFOLD_IMAGE_TOKENS") or 16384)
++
++
+ def prepare_images(frontend, messages, render, *, context_limit=None, limits: ImageLimits = DEFAULT_LIMITS):
+     from tensorfold.vision.images import ImageInputError, load_images, split_images
+ 
+     if frontend is None:
+         raise RequestError('image input requires a supported vision checkpoint served with --vision')
+     allow_urls = bool(getattr(frontend, 'allow_urls', False))
++    videos = bool(getattr(frontend, 'videos', False))       # a frontend that encodes video frames too
+     try:
+-        template, sources = split_images(messages, limits=limits, allow_urls=allow_urls)
++        template, sources = split_images(messages, limits=limits, allow_urls=allow_urls, allow_videos=videos)
+     except (ImageInputError, ValueError) as exc:
+         raise RequestError(str(exc)) from exc
+     slot = image_slot()
+     try:
+-        images = load_images(sources, limits=limits, allow_urls=allow_urls)
+-        prepared = frontend.prepare(render(template), images, max_prompt_tokens=context_limit)
++        from tensorfold.vision.images import ImageSource
++
++        images = load_images([s for s in sources if isinstance(s, ImageSource)], limits=limits, allow_urls=allow_urls)
++        clips = [s for s in sources if not isinstance(s, ImageSource)]
++        if clips:
++            from tensorfold.vision.videos import load_videos
++
++            clips = load_videos(clips, frontend.video_size, allow_urls=allow_urls)
++            prepared = frontend.prepare(render(template), images, videos=clips, max_visual_tokens=_image_tokens(),
++                                         max_prompt_tokens=context_limit)
++        else:
++            prepared = frontend.prepare(render(template), images, max_visual_tokens=_image_tokens(),
++                                        max_prompt_tokens=context_limit)
+     except (ImageInputError, ValueError, ImportError) as exc:
+         raise RequestError(str(exc)) from exc
+     finally:
+diff --git tensorfold/vision/images.py tensorfold/vision/images.py
+index 0c716cc..fe6b9aa 100644
+--- tensorfold/vision/images.py
++++ tensorfold/vision/images.py
+@@ -44,7 +44,17 @@ class ImageLimits:
+                 raise ValueError(f"{name} must be an integer")
+ 
+ 
+-DEFAULT_LIMITS = ImageLimits()
++def _env_limits() -> ImageLimits:
++    import os
++    count = int(os.environ.get("TENSORFOLD_MAX_IMAGES") or 50)
++    if not 1 <= count <= 128:
++        raise ValueError(f"TENSORFOLD_MAX_IMAGES: 1 to 128 images, not {count}")
++    return ImageLimits(max_images=count, max_total_encoded_bytes=64 * 1024 * 1024,
++                       max_total_pixels=max(32 * 1024 * 1024, count * 8 * 1024 * 1024),
++                       total_timeout_seconds=60.0)
++
++
++DEFAULT_LIMITS = _env_limits()
+ 
+ 
+ def _count_error(limits: ImageLimits) -> ImageInputError:
+@@ -120,8 +130,8 @@ def _check_source(source: ImageSource, limits: ImageLimits, allow_urls: bool = F
+         raise ImageInputError("image URL is too long")
+ 
+ 
+-def split_images(messages: list[dict[str, Any]], *, limits: ImageLimits = DEFAULT_LIMITS, allow_urls: bool = False
+-                 ) -> tuple[list[dict[str, Any]], list[ImageSource]]:
++def split_images(messages: list[dict[str, Any]], *, limits: ImageLimits = DEFAULT_LIMITS, allow_urls: bool = False,
++                 allow_videos: bool = False) -> tuple[list[dict[str, Any]], list[Any]]:
+     """Preserve ordered parts, replacing user image URLs with processor image markers."""
+     if not isinstance(messages, list) or not messages:
+         raise ImageInputError("messages must be a non-empty list")
+@@ -149,18 +159,32 @@ def split_images(messages: list[dict[str, Any]], *, limits: ImageLimits = DEFAUL
+                 if not isinstance(part.get("text"), str) or any(part.get(key) for key in _MEDIA):
+                     raise ImageInputError("text parts must contain a text string without media")
+                 parts.append(dict(part))
++            elif kind == "video_url" and allow_videos:
++                from .videos import DEFAULT_VIDEO_LIMITS, video_source
++
++                if role != "user":
++                    raise ImageInputError("video_url parts are supported only in user messages")
++                if any(part.get(key) for key in _MEDIA - {"video_url"}):
++                    raise ImageInputError("video_url parts cannot contain other media")
++                videos = sum(type(s).__name__ == "VideoSource" for s in sources)
++                if videos >= DEFAULT_VIDEO_LIMITS.max_videos:
++                    raise ImageInputError(f"a request supports at most {DEFAULT_VIDEO_LIMITS.max_videos} videos")
++                sources.append(video_source(part.get("video_url"), DEFAULT_VIDEO_LIMITS, allow_urls))
++                parts.append({"type": "video"})
+             elif kind == "image_url":
+                 if role != "user":
+                     raise ImageInputError("image_url parts are supported only in user messages")
+                 if any(part.get(key) for key in _MEDIA - {"image_url"}):
+                     raise ImageInputError("image_url parts cannot contain other media")
+-                if len(sources) >= limits.max_images:
++                if sum(isinstance(s, ImageSource) for s in sources) >= limits.max_images:
+                     raise _count_error(limits)
+                 source = _source(part.get("image_url"), limits, allow_urls)
+                 sources.append(source)
+                 parts.append({"type": "image", "detail": source.detail})
+             else:
+-                raise ImageInputError("content parts must be text or image_url; audio and video are unsupported")
++                raise ImageInputError("content parts must be text, image_url or video_url; audio is unsupported"
++                                      if allow_videos else
++                                      "content parts must be text or image_url; audio and video are unsupported")
+         output.append({**message, "content": parts})
+     return output, sources
+ 
+diff --git tensorfold/vision/images_http.py tensorfold/vision/images_http.py
+index 16d6627..f354aea 100644
+--- tensorfold/vision/images_http.py
++++ tensorfold/vision/images_http.py
+@@ -109,7 +109,7 @@ def _close_socket(sock: socket.socket) -> None:
+ 
+ 
+ def _request(host: str, port: int, target: str, addresses: list[tuple],
+-             max_bytes: int, deadline: float) -> tuple[bytes | None, str | None, str | None]:
++             max_bytes: int, deadline: float, media_types=MEDIA_TYPES) -> tuple[bytes | None, str | None, str | None]:
+     """A watchdog bounds slow headers and TLS handshakes, not just individual reads."""
+     timeout = _remaining(deadline)
+     family, kind, protocol, _, address = addresses[0]
+@@ -128,7 +128,7 @@ def _request(host: str, port: int, target: str, addresses: list[tuple],
+         sock.settimeout(_remaining(deadline))
+         sock.do_handshake()
+         connection.sock = sock
+-        connection.request("GET", target, headers={"Accept": ", ".join(MEDIA_TYPES), "Accept-Encoding": "identity",
++        connection.request("GET", target, headers={"Accept": ", ".join(media_types), "Accept-Encoding": "identity",
+                                                    "User-Agent": f"TensorFold/{__version__}"})
+         response = connection.getresponse()
+         _remaining(deadline)
+@@ -142,8 +142,9 @@ def _request(host: str, port: int, target: str, addresses: list[tuple],
+         if response.getheader("Content-Encoding", "identity").lower() != "identity":
+             raise ImageInputError("compressed HTTP image responses are unsupported")
+         media = response.getheader("Content-Type", "").split(";", 1)[0].strip().lower()
+-        if media not in MEDIA_TYPES:
+-            raise ImageInputError("image URL content type must be JPEG, PNG or WebP")
++        if media not in media_types:
++            raise ImageInputError("image URL content type must be JPEG, PNG or WebP" if media_types is MEDIA_TYPES
++                                  else f"media URL content type must be one of {', '.join(media_types)}")
+         length = response.getheader("Content-Length")
+         if length is not None:
+             if not length.isascii() or not length.isdecimal() or int(length) > max_bytes:
+@@ -166,13 +167,13 @@ def _request(host: str, port: int, target: str, addresses: list[tuple],
+ 
+ 
+ def fetch_image(url: str, *, max_bytes: int, deadline: float, max_redirects: int,
+-                max_url_chars: int) -> tuple[bytes, str]:
++                max_url_chars: int, media_types=MEDIA_TYPES) -> tuple[bytes, str]:
+     """Resolve and validate each redirect, then connect directly to its checked address."""
+     try:
+         for redirect in range(max_redirects + 1):
+             host, port, target = _url(url, max_url_chars)
+             addresses = _resolve(host, port, deadline)
+-            data, location, media = _request(host, port, target, addresses, max_bytes, deadline)
++            data, location, media = _request(host, port, target, addresses, max_bytes, deadline, media_types)
+             if location is None:
+                 return data, media
+             if redirect == max_redirects:
+diff --git tensorfold/vision/qwen_cuda.py tensorfold/vision/qwen_cuda.py
+index 33f51fc..0525584 100644
+--- tensorfold/vision/qwen_cuda.py
++++ tensorfold/vision/qwen_cuda.py
+@@ -9,7 +9,9 @@ import os
+ from pathlib import Path
+ from typing import Any
+ 
+-MAX_PATCHES = 16384
++MAX_PATCHES = 16384                  # one tower call (a 4,096-token image), and a video call's patches
++MAX_IMAGE_PATCHES = 4 * 16384        # a request's image patches (16,384 tokens), encoded MAX_PATCHES at a time
++MAX_VIDEO_PATCHES = 16 * 16384       # a request's video patches (~65k tokens), encoded MAX_PATCHES at a time
+ WORKSPACE_BYTES = 4 * 1024**3
+ 
+ 
+@@ -154,6 +156,9 @@ class QwenCudaVision:
+         self.frontend = QwenImageProcessor.from_directory(model_dir)
+         raw = json.loads((Path(model_dir) / "config.json").read_text())
+         self.image_token = int(raw["image_token_id"])
++        # videos: Flash Next's frontend (the frame groups ride the image path; tested on that checkpoint)
++        self.videos = "video_token_id" in raw
++        self.media_tokens = frozenset({self.image_token} | ({int(raw["video_token_id"])} if self.videos else set()))
+         self.device = device
+         config = Qwen3_5VisionConfig(**{k: v for k, v in self.config.items()
+                                       if k not in ("model_type", "deepstack_visual_indexes")})
+diff --git tensorfold/vision/qwen_processing.py tensorfold/vision/qwen_processing.py
+index bf6b605..a6000c5 100644
+--- tensorfold/vision/qwen_processing.py
++++ tensorfold/vision/qwen_processing.py
+@@ -135,20 +135,25 @@ class QwenImageProcessor:
+         processor = ImageProcessor(**_processor_options(path, config["vision_config"]))
+         return cls(config, processor, tokenizer)
+ 
+-    def prepare(self, rendered_prompt: str, images: Sequence[Any], *, max_visual_tokens: int = 4096,
+-                max_prompt_tokens: int | None = None) -> PreparedVisionPrompt:
+-        """Expand image markers and calculate request-local rotary metadata without touching the GPU."""
+-        if not images or max_visual_tokens < 1:
++    def prepare(self, rendered_prompt: str, images: Sequence[Any], *, videos: Sequence[Any] = (),
++                max_visual_tokens: int = 4096, max_prompt_tokens: int | None = None) -> PreparedVisionPrompt:
++        """Expand image (and video) markers and calculate request-local rotary metadata without touching the GPU."""
++        if (not images and not videos) or max_visual_tokens < 1:
+             raise ValueError("Image preprocessing needs images and a positive visual-token budget")
+         if rendered_prompt.count(self.image_token) != len(images):
+             raise ValueError("The rendered prompt must contain exactly one image marker for each image")
++        if videos and getattr(self, 'video_token', None) is None:
++            raise ValueError("this checkpoint's config names no video token")
++        if videos and rendered_prompt.count(self.video_token) != len(videos):
++            raise ValueError("The rendered prompt must contain exactly one video marker for each video")
+         if len(images) > max_visual_tokens:
+             raise ValueError("The image count exceeds the visual-token budget")
+         vision = self.config["vision_config"]
+         factor = int(vision["patch_size"]) * int(vision["spatial_merge_size"])
+-        limit = max_visual_tokens // len(images)
+-        per_image = min(int(getattr(self.processor, "max_pixels", limit * factor**2)), limit * factor**2)
+         parts, grids = [], []
++        if images:
++            limit = min(max_visual_tokens // len(images), 4096)
++            per_image = min(int(getattr(self.processor, "max_pixels", limit * factor**2)), limit * factor**2)
+         for image in images:
+             cap = min(per_image, 256 * factor**2) if getattr(image, "detail", "auto") == "low" else per_image
+             result = self.processor(images=[image.to_pil()], max_pixels=cap,
+diff --git tensorfold/vision/videos.py tensorfold/vision/videos.py
+new file mode 100644
+index 0000000..271f7ce
+--- /dev/null
++++ tensorfold/vision/videos.py
+@@ -0,0 +1,172 @@
++"""CPU video inputs: bounded bytes, frames sampled at a fixed rate, decoded straight to the tower's resolution."""
++
++from __future__ import annotations
++
++import hashlib
++import io
++import math
++import time
++from dataclasses import dataclass, field
++from typing import Any, Callable
++
++import numpy as np
++
++from .images import _data_bytes
++from .images_http import ImageInputError, fetch_image
++
++VIDEO_MEDIA_TYPES = {"video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "video/x-matroska": "mkv"}
++
++
++@dataclass(frozen=True, slots=True)
++class VideoLimits:
++    max_videos: int = 2
++    max_encoded_bytes: int = 64 * 1024 * 1024
++    max_total_encoded_bytes: int = 96 * 1024 * 1024
++    max_dimension: int = 8192
++    max_seconds: float = 3600.0          # of footage; frames past the sampled ones are decoded and dropped
++    fps: float = 2.0                      # frames sampled a second (Qwen3-VL's rate)
++    min_frames: int = 4
++    max_frames: int = 256                 # a longer video is sampled more sparsely, over its whole length
++    timeout_seconds: float = 20.0
++    total_timeout_seconds: float = 120.0
++    max_redirects: int = 3
++    max_url_chars: int = 4096
++
++
++DEFAULT_VIDEO_LIMITS = VideoLimits()
++
++
++@dataclass(frozen=True, slots=True)
++class VideoSource:
++    url: str
++
++
++@dataclass(frozen=True, slots=True)
++class VideoInput:
++    frames: np.ndarray            # [frames, height, width, 3] uint8, already at the tower's resolution
++    indices: tuple[int, ...]      # each frame's index in the source
++    fps: float                    # the source's frame rate
++    content_hash: str = field(init=False)
++
++    def __post_init__(self) -> None:
++        if (not isinstance(self.frames, np.ndarray) or self.frames.dtype != np.uint8 or self.frames.ndim != 4
++                or self.frames.shape[-1] != 3 or len(self.indices) != self.frames.shape[0] or not self.indices
++                or not math.isfinite(self.fps) or self.fps <= 0):
++            raise ImageInputError("video input requires RGB frames, one index each and a positive frame rate")
++        self.frames.setflags(write=False)
++        digest = hashlib.sha256(b"tensorfold-video-v1\0" + np.asarray(self.frames.shape, dtype=">u4").tobytes())
++        digest.update(np.asarray(self.indices, dtype=">u8").tobytes())
++        digest.update(self.frames.tobytes())
++        object.__setattr__(self, "content_hash", digest.hexdigest())
++
++    def timestamps(self, temporal: int) -> list[float]:
++        """Each group of ``temporal`` frames' time: the mean of its first and last frame (Qwen3-VL's processor)."""
++        indices = list(self.indices)
++        if len(indices) % temporal:
++            indices.extend(indices[-1] for _ in range(temporal - len(indices) % temporal))
++        seconds = [i / self.fps for i in indices]
++        return [(seconds[i] + seconds[i + temporal - 1]) / 2 for i in range(0, len(seconds), temporal)]
++
++
++def video_source(value: Any, limits: VideoLimits, allow_urls: bool) -> VideoSource:
++    if not isinstance(value, dict) or not isinstance(value.get("url"), str) or not value["url"]:
++        raise ImageInputError("video_url must contain a non-empty url string")
++    url = value["url"]
++    if url.startswith("data:"):
++        if len(url) > limits.max_encoded_bytes * 3 // 2 + 256:
++            raise ImageInputError("video data URL exceeds the encoded byte limit")
++    elif not url.startswith("https://"):
++        raise ImageInputError("videos require data URLs or public HTTPS URLs")
++    elif not allow_urls:
++        raise ImageInputError("video URLs are off on this server; send the video as a data URL, or start the server "
++                              "with --vision-urls")
++    elif len(url) > limits.max_url_chars:
++        raise ImageInputError("video URL is too long")
++    return VideoSource(url)
++
++
++def _av():
++    try:
++        import av
++    except ImportError:
++        raise ImageInputError("video inputs require PyAV (pip install av)") from None
++    return av
++
++
++def sample_indices(total: int, fps: float, limits: VideoLimits) -> np.ndarray:
++    """Qwen3-VL's frame choice: ``limits.fps`` frames a second (at least min_frames, at most max_frames) spread
++    evenly over the whole video."""
++    count = int(total / fps * limits.fps)
++    count = min(max(count, limits.min_frames), limits.max_frames, total)
++    return np.linspace(0, total - 1, count).round().astype(int)
++
++
++def decode_video(data: bytes, size: Callable[[int, int, int], tuple[int, int]], limits: VideoLimits,
++                 deadline: float) -> VideoInput:
++    """Decode the sampled frames of one video, each scaled to ``size(frames, height, width)`` (bicubic)."""
++    av = _av()
++    try:
++        with av.open(io.BytesIO(data), mode="r") as container:
++            if not container.streams.video:
++                raise ImageInputError("the video has no video stream")
++            stream = container.streams.video[0]
++            stream.thread_type = "AUTO"
++            width, height = int(stream.codec_context.width or 0), int(stream.codec_context.height or 0)
++            if min(width, height) <= 0 or max(width, height) > limits.max_dimension:
++                raise ImageInputError("video dimensions are missing or exceed the pixel limit")
++            rate = stream.average_rate or stream.guessed_rate or 24
++            fps = float(rate)
++            seconds = float(stream.duration * stream.time_base) if stream.duration else (
++                container.duration / 1e6 if container.duration else 0.0)
++            total = int(stream.frames or round(seconds * fps))
++            if not 0 < fps <= 1000 or total <= 0:
++                raise ImageInputError("the video's frame count or rate is missing")
++            if total / fps > limits.max_seconds:
++                raise ImageInputError(f"videos are limited to {limits.max_seconds / 60:.0f} minutes")
++            wanted = sample_indices(total, fps, limits)
++            out_h, out_w = size(len(wanted), height, width)
++            keep = set(int(i) for i in wanted)
++            frames, indices = [], []
++            for n, frame in enumerate(container.decode(stream)):
++                if n > wanted[-1] or time.monotonic() >= deadline:
++                    break
++                if n in keep:
++                    frames.append(frame.to_ndarray(format="rgb24", width=out_w, height=out_h,
++                                                   interpolation="BICUBIC"))
++                    indices.append(n)
++            if time.monotonic() >= deadline:
++                raise ImageInputError("video decoding exceeds the time limit")
++    except ImageInputError:
++        raise
++    except (OSError, ValueError, MemoryError) as exc:
++        raise ImageInputError(f"video bytes are invalid or unsupported ({type(exc).__name__}); use MP4 or "
++                              "WebM") from None
++    if len(frames) < 2:
++        raise ImageInputError("the video has fewer than two decodable frames")
++    return VideoInput(np.stack(frames), tuple(indices), fps)
++
++
++def load_videos(sources: list[VideoSource], size: Callable[[int, int, int], tuple[int, int]], *,
++                limits: VideoLimits = DEFAULT_VIDEO_LIMITS, allow_urls: bool = False) -> list[VideoInput]:
++    """Bound encoded bytes and decoding time across the videos of one request."""
++    if len(sources) > limits.max_videos:
++        raise ImageInputError(f"a request supports at most {limits.max_videos} videos")
++    total = 0
++    deadline = time.monotonic() + limits.total_timeout_seconds
++    output = []
++    for source in sources:
++        remaining = min(limits.max_encoded_bytes, limits.max_total_encoded_bytes - total)
++        if remaining <= 0 or time.monotonic() >= deadline:
++            raise ImageInputError("video request exceeds the total byte or time limit")
++        if source.url.startswith("data:"):
++            data = _data_bytes(source.url, remaining)
++        elif allow_urls:
++            data, _ = fetch_image(source.url, max_bytes=remaining,
++                                  deadline=min(deadline, time.monotonic() + limits.timeout_seconds),
++                                  max_redirects=limits.max_redirects, max_url_chars=limits.max_url_chars,
++                                  media_types=VIDEO_MEDIA_TYPES)
++        else:
++            raise ImageInputError("video URLs are off on this server")
++        total += len(data)
++        output.append(decode_video(data, size, limits, deadline))
++    return output
