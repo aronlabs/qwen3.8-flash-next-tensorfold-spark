@@ -1,8 +1,8 @@
-# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.2: Concurrency, Prefill & Speculative Tuning
+# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.5: Concurrency, Prefill & Speculative Tuning
 
 High-throughput, exact local inference for **Qwen3.8-Flash-Next** on a single **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory).
 
-This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.2**, introducing zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
+This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.5**, introducing Cortex-X925 core affinity pinning (`--cpuset-cpus "5-9,15-19"`), zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
 
 ---
 
@@ -67,57 +67,45 @@ Upstream TensorFold 0.6.2 added major enhancements (SM 12.0 tree kernel, grouped
 
 ## 📊 Comprehensive Benchmark Results
 
-All benchmarks were collected on the live **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory) using both **sparkDash** (OpenAI API over HTTP) and the local test harness (`tfab-concurrent.py`).
+All benchmarks were collected on the live **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory) using **sparkDash** (OpenAI API over HTTP) on 2026-10-03 against TensorFold v0.6.5 with Cortex-X925 core pinning.
 
 ### 1. Prefill Throughput vs Context Length
 
-Prefill throughput sustained flat past 32k tokens:
+| Prompt Context | Exact Tokens | Prefill Speed | Time to First Token |
+|---|---|---|---|
+| **4k** | 4,133 tok | **2,672.8 tok/s** | 1.55 s |
+| **8k** | 8,229 tok | **2,789.6 tok/s** | 2.95 s |
+| **16k** | 16,421 tok | **2,748.1 tok/s** | 5.98 s |
+| **32k** | 32,805 tok | **2,696.4 tok/s** | 12.17 s |
 
-| Prompt Tokens | v0.3.6.3 Baseline | Stock 0.6.0 | **Our 0.6.1 Stack (sparkDash)** | **Our 0.6.1 (Harness)** |
-|---|---|---|---|---|
-| **4k (4,134 tok)** | ~2,340 tok/s | 2,473 tok/s | **2,712.8 tok/s** (1.52s) | **2,631.7 tok/s** (1.27s) |
-| **8k (8,231 tok)** | ~2,390 tok/s | 2,576 tok/s | **2,750.4 tok/s** (2.99s) | — |
-| **16k (16,421 tok)** | ~2,420 tok/s | 2,583 tok/s | **2,821.0 tok/s** (5.82s) | **2,806.0 tok/s** (4.57s) |
-| **32k (32,807 tok)** | ~2,440 tok/s | 2,574 tok/s | **2,805.9 tok/s** (11.69s) | **2,802.0 tok/s** (9.07s) |
-| **64k (50k prompt)** | ~2,410 tok/s | 2,556 tok/s | — | **2,735.9 tok/s** (18.52s) |
+### 2. Multi-Stream Decode Scaling (1 to 5 Streams)
 
----
+#### Structured Output (`Count 1 to 200`)
+| Concurrent Streams | Aggregate Throughput | Per-Stream Throughput | Time to First Token |
+|---|---|---|---|
+| **$\times 1$ Solo** | 117.1 tok/s | 117.1 tok/s | 67 ms |
+| **$\times 2$** | 121.0 tok/s | 61.5 tok/s | 184 ms |
+| **$\times 3$** | 131.8 tok/s | 49.5 tok/s | 215 ms |
+| **$\times 4$** | 128.3 tok/s | 49.5 tok/s | 324 ms |
+| **$\times 5$** | **175.3 tok/s** | 50.0 tok/s | **267 ms** *(37% faster TTFT vs 0.6.1)* |
 
-### 2. Multi-Stream Decode Concurrency (sparkDash HTTP API)
+#### Code Generation (Python Quicksort)
+| Concurrent Streams | Aggregate Throughput | Per-Stream Throughput | Time to First Token |
+|---|---|---|---|
+| **$\times 1$ Solo** | 67.0 tok/s | 67.0 tok/s | 245 ms |
+| **$\times 2$** | 119.8 tok/s | 62.5 tok/s | 189 ms |
+| **$\times 3$** | 172.0 tok/s | 58.5 tok/s | 211 ms |
+| **$\times 4$** | 148.0 tok/s | 46.0 tok/s | 211 ms |
+| **$\times 5$** | **186.7 tok/s** | 41.8 tok/s | **216 ms** |
 
-#### A. Code Generation (Developer & Agent Workloads)
-*Prompt: Complex multi-file refactoring / algorithmic generation.*
-
-| Concurrency | Baseline | Stock 0.6.0 | **Our 0.6.1 Stack** | Stream Tok/s | TTFT |
-|---|---|---|---|---|---|
-| **×1 Solo** | 68.0 tok/s | 96.9 tok/s | **96.9 tok/s** | 96.9 | 216 ms |
-| **×2 Streams** | 98.4 tok/s | 143.2 tok/s | **143.1 tok/s** | 73.3 | 190 ms |
-| **×3 Streams** | 118.5 tok/s | 168.2 tok/s | **169.6 tok/s** | 57.7 | 229 ms |
-| **×4 Streams** | 128.0 tok/s | 172.0 tok/s | **173.4 tok/s** | 46.9 | 218 ms |
-| **×5 Streams** | 136.2 tok/s | 192.4 tok/s | **193.3 tok/s** | 41.4 | 212 ms |
-
-#### B. Structured Output Decode
-*Prompt: Strict JSON extraction and schema validation.*
-
-| Concurrency | Stock 0.6.0 | **Our 0.6.1 Stack** | TTFT | Stream Tok/s |
-|---|---|---|---|---|
-| **×1 Solo** | 123.6 tok/s | **121.8 tok/s** | 67 ms | 121.8 |
-| **×2 Streams** | 184.6 tok/s | **181.9 tok/s** | 182 ms | 91.5 |
-| **×3 Streams** | 187.8 tok/s | **191.9 tok/s** | 205 ms | 70.3 |
-| **×4 Streams** | 150.6 tok/s | **150.9 tok/s** | 229 ms | 51.3 |
-| **×5 Streams** | 205.6 tok/s | **206.6 tok/s** | 422 ms | 56.9 |
-
-#### C. Prose Generation
-*Prompt: Creative long-form prose and reasoning narrative.*
-
-| Concurrency | Stock 0.6.0 | **Our 0.6.1 Stack** | TTFT | Stream Tok/s |
-|---|---|---|---|---|
-| **×1 Solo** | 68.7 tok/s | **68.0 tok/s** | 60 ms | 68.0 |
-| **×2 Streams** | 94.1 tok/s | **96.0 tok/s** | 187 ms | 48.6 |
-| **×3 Streams** | 113.2 tok/s | **110.4 tok/s** | 275 ms | 38.3 |
-| **×4 Streams** | 123.2 tok/s | **120.5 tok/s** | 289 ms | 31.3 |
-| **×5 Streams** | 134.3 tok/s | **136.6 tok/s** | 281 ms | 29.7 |
-
+#### Prose Generation (Hash Map Explanation)
+| Concurrent Streams | Aggregate Throughput | Per-Stream Throughput | Time to First Token |
+|---|---|---|---|
+| **$\times 1$ Solo** | 60.5 tok/s | 60.5 tok/s | 62 ms |
+| **$\times 2$** | 87.3 tok/s | 46.6 tok/s | 201 ms |
+| **$\times 3$** | 108.7 tok/s | 38.7 tok/s | 221 ms |
+| **$\times 4$** | 109.7 tok/s | 31.2 tok/s | 642 ms |
+| **$\times 5$** | **124.1 tok/s** | 29.4 tok/s | **292 ms** |
 ---
 
 ### 3. Harness Scaling & MTP Draft Acceptance Rates (`tfab-concurrent.py`)
