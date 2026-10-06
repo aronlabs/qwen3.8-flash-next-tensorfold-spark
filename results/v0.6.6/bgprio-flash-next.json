@@ -1,0 +1,146 @@
+[
+ {
+  "scenario": "ctl4",
+  "rep": 0,
+  "fg_ttft": 0.27829909324645996,
+  "fg_total": 1.5933864116668701,
+  "bg_chunks_per_s_mean": 13.178103244674649,
+  "bg_total_s_max": 39.237338066101074
+ },
+ {
+  "scenario": "flag4",
+  "rep": 0,
+  "fg_ttft": 0.22494292259216309,
+  "fg_total": 1.3699429035186768,
+  "bg_chunks_per_s_mean": 13.860935408573116,
+  "bg_total_s_max": 36.96968460083008
+ },
+ {
+  "scenario": "ctl5",
+  "rep": 0,
+  "fg_ttft": 33.07665705680847,
+  "fg_total": 34.35360383987427,
+  "bg_chunks_per_s_mean": 11.831853893891493,
+  "bg_total_s_max": 42.73024010658264
+ },
+ {
+  "scenario": "flag5",
+  "rep": 0,
+  "fg_ttft": 0.3401331901550293,
+  "fg_total": 1.526491403579712,
+  "bg_chunks_per_s_mean": 11.597113857292289,
+  "bg_total_s_max": 44.080448389053345
+ },
+ {
+  "scenario": "own5",
+  "rep": 0,
+  "fg_ttft": 0.2835400104522705,
+  "fg_total": 1.4300405979156494,
+  "bg_chunks_per_s_mean": 11.657473933382077,
+  "bg_total_s_max": 42.92872381210327
+ },
+ {
+  "scenario": "bgself5",
+  "rep": 0,
+  "fg_ttft": 32.24721431732178,
+  "fg_total": 33.46509408950806,
+  "bg_chunks_per_s_mean": 12.104570304005971,
+  "bg_total_s_max": 41.783522844314575
+ },
+ {
+  "scenario": "ctl4",
+  "rep": 1,
+  "fg_ttft": 0.2748904228210449,
+  "fg_total": 1.5838813781738281,
+  "bg_chunks_per_s_mean": 13.090739019805735,
+  "bg_total_s_max": 38.02409219741821
+ },
+ {
+  "scenario": "flag4",
+  "rep": 1,
+  "fg_ttft": 0.1980431079864502,
+  "fg_total": 1.4805312156677246,
+  "bg_chunks_per_s_mean": 13.491875150549337,
+  "bg_total_s_max": 36.832486152648926
+ },
+ {
+  "scenario": "ctl5",
+  "rep": 1,
+  "fg_ttft": 32.978283405303955,
+  "fg_total": 34.31752347946167,
+  "bg_chunks_per_s_mean": 11.63763852799568,
+  "bg_total_s_max": 42.913381814956665
+ },
+ {
+  "scenario": "flag5",
+  "rep": 1,
+  "fg_ttft": 0.2809638977050781,
+  "fg_total": 1.5330348014831543,
+  "bg_chunks_per_s_mean": 11.719314865205707,
+  "bg_total_s_max": 44.90027666091919
+ },
+ {
+  "scenario": "own5",
+  "rep": 1,
+  "fg_ttft": 0.274644136428833,
+  "fg_total": 1.5681698322296143,
+  "bg_chunks_per_s_mean": 11.611887485703292,
+  "bg_total_s_max": 43.93450975418091
+ },
+ {
+  "scenario": "bgself5",
+  "rep": 1,
+  "fg_ttft": 32.04932427406311,
+  "fg_total": 33.36269927024841,
+  "bg_chunks_per_s_mean": 11.868465865570831,
+  "bg_total_s_max": 42.91353225708008
+ },
+ {
+  "scenario": "ctl4",
+  "rep": 2,
+  "fg_ttft": 0.3154942989349365,
+  "fg_total": 1.470020055770874,
+  "bg_chunks_per_s_mean": 13.194334127777168,
+  "bg_total_s_max": 36.922163009643555
+ },
+ {
+  "scenario": "flag4",
+  "rep": 2,
+  "fg_ttft": 0.12791132926940918,
+  "fg_total": 1.2956604957580566,
+  "bg_chunks_per_s_mean": 13.639157340075299,
+  "bg_total_s_max": 35.60898685455322
+ },
+ {
+  "scenario": "ctl5",
+  "rep": 2,
+  "fg_ttft": 31.11214780807495,
+  "fg_total": 32.35295128822327,
+  "bg_chunks_per_s_mean": 11.58600077081918,
+  "bg_total_s_max": 41.43319869041443
+ },
+ {
+  "scenario": "flag5",
+  "rep": 2,
+  "fg_ttft": 0.24592041969299316,
+  "fg_total": 1.447007417678833,
+  "bg_chunks_per_s_mean": 11.419541163312738,
+  "bg_total_s_max": 41.220653772354126
+ },
+ {
+  "scenario": "own5",
+  "rep": 2,
+  "fg_ttft": 0.2718987464904785,
+  "fg_total": 1.4360315799713135,
+  "bg_chunks_per_s_mean": 11.479908417163916,
+  "bg_total_s_max": 41.00709247589111
+ },
+ {
+  "scenario": "bgself5",
+  "rep": 2,
+  "fg_ttft": 29.914499044418335,
+  "fg_total": 31.144440174102783,
+  "bg_chunks_per_s_mean": 11.95266550175997,
+  "bg_total_s_max": 40.25320363044739
+ }
+]

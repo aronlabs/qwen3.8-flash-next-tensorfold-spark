@@ -1,8 +1,8 @@
-# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.5: Concurrency, Prefill & Speculative Tuning
+# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.6: Concurrency, Prefill & Speculative Tuning
 
 High-throughput, exact local inference for **Qwen3.8-Flash-Next** on a single **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory).
 
-This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.5**, introducing Cortex-X925 core affinity pinning (`--cpuset-cpus "5-9,15-19"`), zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
+This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.6**, introducing Cortex-X925 core affinity pinning (`--cpuset-cpus "5-9,15-19"`), zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
 
 ---
 
@@ -23,6 +23,47 @@ This repository ports, extends, and benchmarks the high-performance patches from
 | **Token Bit-Parity** | 100% | 100% | **100% Bit-Identical** (12/12) | Zero divergence |
 ---
 
+## 🆕 TensorFold 0.6.6 (2026-10-06): background priority by model id
+
+TensorFold 0.6.6 changes one thing over 0.6.5: the opt-in `--name-priority ID=background` flag on the CUDA server. A request that names that served id (`--name` or an `--alias`) and sends no `priority` of its own is served as `priority: "background"`, so it yields to foreground requests; a request's own `priority` always wins. It suits clients that can pick a model id but cannot add a field to the request body, such as batch extractors or sub-agents.
+
+`start.sh` now serves two ids: `Qwen3.8-Flash-Next` (normal priority) and `Qwen3.8-Flash-Next-bg` (`--alias Qwen3.8-Flash-Next-bg --name-priority Qwen3.8-Flash-Next-bg=background`). Delete those two flags to serve one id. `v065-concurrent-vision.patch` applies unchanged to 0.6.6 (the file keeps its name), so the speed patchset is the same.
+
+**Foreground latency behind background load.** A short foreground request is sent 4 s into a load of long generations (median of 3 repetitions, 5 streams, `bgprio-bench.py`):
+
+| Scenario | Foreground time to first token |
+|---|---|
+| 4 of 5 streams busy, no flag | 0.28 s |
+| 4 of 5 streams busy, load on the `-bg` id | 0.20 s |
+| All 5 streams busy, no flag | **33.0 s** |
+| All 5 streams busy, load on the `-bg` id | **0.28 s** |
+| All 5 busy on the `-bg` id, foreground sends its own `"priority":"normal"` | 0.27 s |
+| Foreground also on the `-bg` id, no priority | 32.1 s (it is background too) |
+
+Background streams decode at 11.6 chunks/s per stream with the flag against 11.7 without, and a sweep sent entirely to the `-bg` id matches the foreground sweep (prefill within 1%, decode the same).
+
+**Speed against 0.6.5** (idle server, [`ab-bench`](https://bench.gummie.dev) protocol: temperature 0, thinking off, 400 tokens, one cold round discarded then 3 timed rounds; aggregate decode tok/s, 0.6.5 -> 0.6.6):
+
+| Prompt | x1 | x2 | x3 | x4 | x5 |
+|---|---|---|---|---|---|
+| structured | 129 -> 129 | 233 -> 233 | 324 -> 322 | 409 -> 408 | 464 -> 462 |
+| prose | 71 -> 71 | 130 -> 130 | 169 -> 169 | 230 -> 228 | 268 -> 269 |
+| code | 104 -> 104 | 147 -> 149 | 179 -> 179 | 186 -> 185 | 209 -> 209 |
+| json | 92 -> 92 | 168 -> 168 | 236 -> 235 | 296 -> 295 | 342 -> 346 |
+
+| Prefill | 0.6.5 | 0.6.6 |
+|---|---|---|
+| 1K | 1756 tok/s, 0.58 s | 1762 tok/s, 0.58 s |
+| 2K | 2353 tok/s, 0.86 s | 2351 tok/s, 0.86 s |
+| 4K | 2711 tok/s, 1.49 s | 2706 tok/s, 1.49 s |
+| 8K | 2873 tok/s, 2.81 s | 2882 tok/s, 2.80 s |
+| 16K | 2874 tok/s, 5.62 s | 2872 tok/s, 5.62 s |
+| 32K | 2795 tok/s, 11.54 s | 2795 tok/s, 11.54 s |
+
+Every decode cell is within 1.1% of 0.6.5 and prefill within 0.4%; time to first token is unchanged. These `ab-bench` figures use a different harness from the sparkDash tables further down, so compare like with like. The full archive, with per-round data and CSV exports, is at [bench.gummie.dev](https://bench.gummie.dev). `bgprio-bench.py` in this repo reproduces the latency table.
+
+---
+
 ## 👥 Credits & Acknowledgments
 
 This project builds directly on the foundational work of:
@@ -31,6 +72,7 @@ This project builds directly on the foundational work of:
 * **[Mia's AI Lab (@MiaAI_Lab)](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold):** Created the original DGX Spark deployment recipe and authored the 64-thread persistent C++ multithreaded SSD n-gram reader (`ssd_read.cpp`), asynchronous read-ahead, and initial memory layout recipes.
 * **[MovieMaker93 (@MovieMaker93)](https://github.com/MovieMaker93):** Authored upstream [TensorFold PR #40](https://github.com/ashhart/TensorFold/pull/40) for dynamic prefill chunk geometry (`indexed_prefill_rows()`), enabling wide chunk sizing up to 16,384 rows.
 * **[Vontra](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP):** For the MLX affine 4-bit group-32 checkpoint with the native MTP speculative draft head.
+* **[philip-pentatonic (@philip-pentatonic)](https://github.com/philip-pentatonic):** Authored the `--name-priority` flag in [TensorFold PR #445](https://github.com/ashhart/TensorFold/pull/445), released in 0.6.6.
 
 ---
 
@@ -167,9 +209,9 @@ cd qwen3.8-flash-next-tensorfold-spark
 ```
 
 ### Step 2: Build Image
-Builds TensorFold 0.6.2 with `v062-concurrent-vision.patch` applied:
+Builds TensorFold 0.6.6 with `v065-concurrent-vision.patch` applied (the patch applies unchanged to 0.6.6):
 ```bash
-docker build -t tensorfold-qwen38:v0.6.2-concurrent-vision .
+docker build -t tensorfold-qwen38:v0.6.6-concurrent-vision .
 ```
 
 ### Step 3: Launch Production Server
