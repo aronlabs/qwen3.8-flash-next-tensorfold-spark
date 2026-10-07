@@ -2,7 +2,7 @@
 # Serve Qwen3.8-Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.2 + Concurrency & Speed Patches
 set -euo pipefail
 
-IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.6-concurrent-vision}"
+IMAGE="${IMAGE:-tensorfold-qwen38:v0.6.6-py06-ed78d6f-copy8-concurrent-vision}"
 CONTAINER_NAME="${CONTAINER_NAME:-qwen38-flash-next-tf}"
 MODEL_ID="${MODEL_ID:-Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"

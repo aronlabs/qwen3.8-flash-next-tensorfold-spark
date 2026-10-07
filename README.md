@@ -1,8 +1,8 @@
-# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6.6: Concurrency, Prefill & Speculative Tuning
+# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6 (python-0.6 @ed78d6f): Concurrency, Prefill, Speculative & Copy-Draft Tuning
 
 High-throughput, exact local inference for **Qwen3.8-Flash-Next** on a single **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory).
 
-This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold 0.6.6**, introducing Cortex-X925 core affinity pinning (`--cpuset-cpus "5-9,15-19"`), zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules.
+This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold** (the `python-0.6` branch at [`ed78d6f`](https://github.com/ashhart/TensorFold/commit/ed78d6fc204d89d90b045bf033d6551e7714f3a1): v0.6.6 plus 12 commits), introducing Cortex-X925 core affinity pinning (`--cpuset-cpus "5-9,15-19"`), zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules. The current build adds **copy drafts**, authored by **[BobClawblaw (@BobClawblaw)](https://github.com/BobClawblaw)** in [TensorFold PR #468](https://github.com/ashhart/TensorFold/pull/468) (commit [`6bf4caf`](https://github.com/ashhart/TensorFold/commit/6bf4caf)), with a small local patch so they work at this recipe's 6-draft depth.
 
 ---
 
@@ -21,6 +21,52 @@ This repository ports, extends, and benchmarks the high-performance patches from
 | **Solo Prose TTFT** | 142 ms | 60 ms | **60 ms** | **-57.7%** |
 | **Multi-turn Agent Resume TTFT** | ~10,200 ms (evicted) | ~9,800 ms (evicted) | **~80 ms** (hot cache hit) | **~120x faster** |
 | **Token Bit-Parity** | 100% | 100% | **100% Bit-Identical** (12/12) | Zero divergence |
+---
+
+## 🆕 Copy drafts on python-0.6 (2026-10-07)
+
+**Why not TensorFold 1.0?** 1.0.0/1.0.1 (released 2026-10-07) is the native Zig engine. On the GB10 it serves only Nemotron 3.5 Lightning; Flash Next on 1.0 is Apple-only and answers one request at a time. The release's Linux binary run on this Spark says so directly: `no registered Zig family serves model_type qwen4_exp; the 0.6 line may`. The Python engine continues on the `python-0.6` branch, which this build now tracks.
+
+**What copy drafts do.** BobClawblaw's [PR #468](https://github.com/ashhart/TensorFold/pull/468): when a stream's last 8 tokens already appeared earlier in its prompt or reply, the round drafts the continuation of that earlier text instead of asking the MTP head. The verify step is unchanged, so every reply equals one-token decoding. It helps whenever a reply repeats its input: quoting, editing a passage, rewriting a file.
+
+**Why they needed a patch here.** Upstream's `CopyIndex.chain()` only copies when the draft depth is at least the 8-token match length. This recipe drafts 6 a round (`--mtp-drafts 6`, also TensorFold's own CUDA default for Flash Next), so stock copy drafts never fired: draft counts matched v0.6.6 exactly. Raising the depth to 8 or 12 turns them on but costs single-stream fresh prose and code 11-25%, because MTP chains also run deeper. `local-copy-match.patch` (3 lines) keeps the 8-token match and trims the copied chain to the depth, the same approach Mia's AI Lab uses in its [`nvfp4-v066`](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/tree/nvfp4-v066) recipe patch. Nothing else changes: same concurrent-vision patchset (it applies to the branch with one 22-line offset), same flags, same `-bg` background id.
+
+**Repeat-heavy replies** (`copy-bench.py`: a ~300-word passage and a 160-line Python file; median decode tok/s; every reply token-identical to v0.6.6):
+
+| Task | v0.6.6 greedy | This build, greedy | v0.6.6 sampled | This build, sampled |
+|---|---|---|---|---|
+| Quote the passage | 102.8 | **135.1 (+31%)** | 92.8 | **113.5 (+22%)** |
+| Fix typos in the passage | 100.7 | **114.1 (+13%)** | 67.6 | **72.5 (+7%)** |
+| Rename a function across the file | 98.7 | **134.9 (+37%)** | 64.0 | **66.7 (+4%)** |
+| Fresh prose | 57.0 | 56.7 (-0.5%) | 65.0 | 64.7 (-0.4%) |
+| Fresh code | 88.7 | 86.3 (-2.8%) | 59.5 | 59.3 (-0.3%) |
+
+Greedy is temperature 0 with thinking off. Sampled is the server's own sampling (1.0 / 0.95 / 20) with thinking on, so most tokens are new reasoning that copies cannot help with; that is why the gain shrinks there.
+
+**Standard sweep against v0.6.6** ([`ab-bench`](https://bench.gummie.dev) protocol: temperature 0, thinking off, 400 tokens, one cold round discarded then 3 timed rounds; aggregate decode tok/s, v0.6.6 -> this build):
+
+| Prompt | x1 | x2 | x3 | x4 | x5 |
+|---|---|---|---|---|---|
+| structured | 129 -> 127 | 233 -> 232 | 322 -> 322 | 408 -> 406 | 462 -> 441 |
+| prose | 71 -> 71 | 130 -> 130 | 169 -> 182 | 228 -> 228 | 269 -> 269 |
+| code | 104 -> 101 | 149 -> 142 | 179 -> 170 | 185 -> 182 | 209 -> 203 |
+| json | 92 -> 88 | 168 -> 145* | 235 -> 225 | 295 -> 283 | 346 -> 331 |
+
+| Prefill | v0.6.6 | This build |
+|---|---|---|
+| 1K | 1762 tok/s, 0.58 s | 1781 tok/s, 0.57 s |
+| 2K | 2351 tok/s, 0.86 s | 2390 tok/s, 0.85 s |
+| 4K | 2706 tok/s, 1.49 s | 2701 tok/s, 1.49 s |
+| 8K | 2882 tok/s, 2.80 s | 2878 tok/s, 2.81 s |
+| 16K | 2872 tok/s, 5.62 s | 2856 tok/s, 5.65 s |
+| 32K | 2795 tok/s, 11.54 s | 2783 tok/s, 11.59 s |
+
+\* One of the three rounds read 112 tok/s; the other two match the rest of the row (about -4%).
+
+**The trade-off, stated plainly.** Prefill and prose are unchanged. Short greedy code and JSON replies lose 2-5%: these prompts repeat their own patterns, so some proposed copies get rejected and take the place of MTP drafts. A control run of the same branch without `local-copy-match.patch` (copies never fire) matched v0.6.6 on code (104 / 149 / 179 / 190 / 209 tok/s), so the cost comes from copy drafts, not from the rest of the branch. For agent work that quotes, edits and rewrites its input, the gain is larger than that cost. To turn copies off without rebuilding, add `-e TENSORFOLD_COPY_DRAFTS=0` to the `docker run` in `start.sh`.
+
+Raw results: `results/v0.6.6-py06/` (`copy-bench-a-066*` = v0.6.6, `copy-bench-b-py06*` = branch without the patch at depth 6, 8 and 12, `copy-bench-c-copy8-d6*` = this build). The full sweep, with per-round data and CSV exports, is on [bench.gummie.dev](https://bench.gummie.dev).
+
 ---
 
 ## 🆕 TensorFold 0.6.6 (2026-10-06): background priority by model id
@@ -73,6 +119,7 @@ This project builds directly on the foundational work of:
 * **[MovieMaker93 (@MovieMaker93)](https://github.com/MovieMaker93):** Authored upstream [TensorFold PR #40](https://github.com/ashhart/TensorFold/pull/40) for dynamic prefill chunk geometry (`indexed_prefill_rows()`), enabling wide chunk sizing up to 16,384 rows.
 * **[Vontra](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP):** For the MLX affine 4-bit group-32 checkpoint with the native MTP speculative draft head.
 * **[philip-pentatonic (@philip-pentatonic)](https://github.com/philip-pentatonic):** Authored the `--name-priority` flag in [TensorFold PR #445](https://github.com/ashhart/TensorFold/pull/445), released in 0.6.6.
+* **[BobClawblaw (@BobClawblaw)](https://github.com/BobClawblaw):** Authored Flash Next CUDA copy drafts in [TensorFold PR #468](https://github.com/ashhart/TensorFold/pull/468) (commit [`6bf4caf`](https://github.com/ashhart/TensorFold/commit/6bf4caf)) and image input on the serial engine and two ranks in [TensorFold PR #473](https://github.com/ashhart/TensorFold/pull/473), both on the `python-0.6` branch this build uses. `local-copy-match.patch` only changes when his copy drafts fire.
 
 ---
 
@@ -209,9 +256,9 @@ cd qwen3.8-flash-next-tensorfold-spark
 ```
 
 ### Step 2: Build Image
-Builds TensorFold 0.6.6 with `v065-concurrent-vision.patch` applied (the patch applies unchanged to 0.6.6):
+Builds TensorFold's `python-0.6` branch at `ed78d6f` with `v065-concurrent-vision.patch` and `local-copy-match.patch` applied:
 ```bash
-docker build -t tensorfold-qwen38:v0.6.6-concurrent-vision .
+docker build -t tensorfold-qwen38:v0.6.6-py06-ed78d6f-copy8-concurrent-vision .
 ```
 
 ### Step 3: Launch Production Server
@@ -247,6 +294,10 @@ python3 tfab-concurrent.py parity winning-stack
 
 # Run concurrency benchmarks only (tests 1 to 5 streams)
 python3 tfab-concurrent.py bench winning-stack
+
+# Copy-draft bench: repeat-heavy vs fresh replies (bring your own ~300-word text and a Python file)
+python3 copy-bench.py mylabel --passage passage.txt --code some_module.py            # greedy, thinking off
+python3 copy-bench.py mylabel-sampled --passage passage.txt --code some_module.py --sampled --reps 4 --max-tokens 2500
 ```
 
 Benchmark output logs and parity proofs are stored under `results/`.

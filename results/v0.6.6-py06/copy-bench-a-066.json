@@ -1,0 +1,301 @@
+{
+ "label": "a-066",
+ "fn_renamed": "decode_prompts",
+ "tasks": {
+  "quote": {
+   "median_decode_tps": 102.82,
+   "shas": [
+    "5b5985b02c71ab23"
+   ],
+   "reps": [
+    {
+     "ttft_s": 0.577,
+     "completion_tokens": 773,
+     "decode_tps": 81.05,
+     "sha": "5b5985b02c71ab23",
+     "tensorfold": {
+      "prefill_s": 0.5188,
+      "decode_s": 9.5678,
+      "rounds": 142,
+      "drafts": true,
+      "cached": 0,
+      "min_rows": 2,
+      "drafted": 761,
+      "accepted": 630,
+      "token_sha": "6290edc7a3f8"
+     }
+    },
+    {
+     "ttft_s": 0.065,
+     "completion_tokens": 773,
+     "decode_tps": 102.86,
+     "sha": "5b5985b02c71ab23",
+     "tensorfold": {
+      "prefill_s": 0.0182,
+      "decode_s": 7.5465,
+      "rounds": 142,
+      "drafts": true,
+      "cached": 798,
+      "min_rows": 2,
+      "drafted": 761,
+      "accepted": 630,
+      "token_sha": "6290edc7a3f8"
+     }
+    },
+    {
+     "ttft_s": 0.063,
+     "completion_tokens": 773,
+     "decode_tps": 102.82,
+     "sha": "5b5985b02c71ab23",
+     "tensorfold": {
+      "prefill_s": 0.017,
+      "decode_s": 7.5497,
+      "rounds": 142,
+      "drafts": true,
+      "cached": 798,
+      "min_rows": 2,
+      "drafted": 761,
+      "accepted": 630,
+      "token_sha": "6290edc7a3f8"
+     }
+    }
+   ]
+  },
+  "typofix": {
+   "median_decode_tps": 100.72,
+   "shas": [
+    "6988335439b5ef31"
+   ],
+   "reps": [
+    {
+     "ttft_s": 0.565,
+     "completion_tokens": 772,
+     "decode_tps": 97.98,
+     "sha": "6988335439b5ef31",
+     "tensorfold": {
+      "prefill_s": 0.5042,
+      "decode_s": 7.9117,
+      "rounds": 143,
+      "drafts": true,
+      "cached": 0,
+      "min_rows": 2,
+      "drafted": 749,
+      "accepted": 628,
+      "token_sha": "63064d665ffe"
+     }
+    },
+    {
+     "ttft_s": 0.072,
+     "completion_tokens": 772,
+     "decode_tps": 100.72,
+     "sha": "6988335439b5ef31",
+     "tensorfold": {
+      "prefill_s": 0.0171,
+      "decode_s": 7.7032,
+      "rounds": 143,
+      "drafts": true,
+      "cached": 828,
+      "min_rows": 2,
+      "drafted": 749,
+      "accepted": 628,
+      "token_sha": "63064d665ffe"
+     }
+    },
+    {
+     "ttft_s": 0.07,
+     "completion_tokens": 772,
+     "decode_tps": 100.96,
+     "sha": "6988335439b5ef31",
+     "tensorfold": {
+      "prefill_s": 0.0171,
+      "decode_s": 7.6836,
+      "rounds": 143,
+      "drafts": true,
+      "cached": 828,
+      "min_rows": 2,
+      "drafted": 749,
+      "accepted": 628,
+      "token_sha": "63064d665ffe"
+     }
+    }
+   ]
+  },
+  "rename": {
+   "median_decode_tps": 98.69,
+   "shas": [
+    "d3b3b069701ec4d0"
+   ],
+   "reps": [
+    {
+     "ttft_s": 1.302,
+     "completion_tokens": 1500,
+     "decode_tps": 94.12,
+     "sha": "d3b3b069701ec4d0",
+     "tensorfold": {
+      "prefill_s": 1.24,
+      "decode_s": 15.9269,
+      "rounds": 275,
+      "drafts": true,
+      "cached": 0,
+      "min_rows": 2,
+      "drafted": 1405,
+      "accepted": 1224,
+      "token_sha": "4f4657e5699f"
+     }
+    },
+    {
+     "ttft_s": 0.067,
+     "completion_tokens": 1500,
+     "decode_tps": 98.76,
+     "sha": "d3b3b069701ec4d0",
+     "tensorfold": {
+      "prefill_s": 0.0175,
+      "decode_s": 15.1783,
+      "rounds": 275,
+      "drafts": true,
+      "cached": 2677,
+      "min_rows": 2,
+      "drafted": 1405,
+      "accepted": 1224,
+      "token_sha": "4f4657e5699f"
+     }
+    },
+    {
+     "ttft_s": 0.069,
+     "completion_tokens": 1500,
+     "decode_tps": 98.69,
+     "sha": "d3b3b069701ec4d0",
+     "tensorfold": {
+      "prefill_s": 0.0172,
+      "decode_s": 15.1891,
+      "rounds": 275,
+      "drafts": true,
+      "cached": 2677,
+      "min_rows": 2,
+      "drafted": 1405,
+      "accepted": 1224,
+      "token_sha": "4f4657e5699f"
+     }
+    }
+   ]
+  },
+  "fresh_prose": {
+   "median_decode_tps": 56.97,
+   "shas": [
+    "d3e344b17fdd7b07"
+   ],
+   "reps": [
+    {
+     "ttft_s": 0.194,
+     "completion_tokens": 952,
+     "decode_tps": 48.72,
+     "sha": "d3e344b17fdd7b07",
+     "tensorfold": {
+      "prefill_s": 0.0752,
+      "decode_s": 19.5245,
+      "rounds": 441,
+      "drafts": true,
+      "cached": 0,
+      "min_rows": 2,
+      "drafted": 848,
+      "accepted": 510,
+      "token_sha": "2d4260e7dcf6"
+     }
+    },
+    {
+     "ttft_s": 0.071,
+     "completion_tokens": 952,
+     "decode_tps": 56.97,
+     "sha": "d3e344b17fdd7b07",
+     "tensorfold": {
+      "prefill_s": 0.0305,
+      "decode_s": 16.6945,
+      "rounds": 441,
+      "drafts": true,
+      "cached": 40,
+      "min_rows": 2,
+      "drafted": 848,
+      "accepted": 510,
+      "token_sha": "2d4260e7dcf6"
+     }
+    },
+    {
+     "ttft_s": 0.062,
+     "completion_tokens": 952,
+     "decode_tps": 57.3,
+     "sha": "d3e344b17fdd7b07",
+     "tensorfold": {
+      "prefill_s": 0.0174,
+      "decode_s": 16.5968,
+      "rounds": 441,
+      "drafts": true,
+      "cached": 40,
+      "min_rows": 2,
+      "drafted": 848,
+      "accepted": 510,
+      "token_sha": "2d4260e7dcf6"
+     }
+    }
+   ]
+  },
+  "fresh_code": {
+   "median_decode_tps": 88.74,
+   "shas": [
+    "ab265c65bb3fefb3"
+   ],
+   "reps": [
+    {
+     "ttft_s": 0.17,
+     "completion_tokens": 1500,
+     "decode_tps": 75.93,
+     "sha": "ab265c65bb3fefb3",
+     "tensorfold": {
+      "prefill_s": 0.0528,
+      "decode_s": 19.7474,
+      "rounds": 339,
+      "drafts": true,
+      "cached": 0,
+      "min_rows": 2,
+      "drafted": 1491,
+      "accepted": 1160,
+      "token_sha": "0995a85f759a"
+     }
+    },
+    {
+     "ttft_s": 0.066,
+     "completion_tokens": 1500,
+     "decode_tps": 88.74,
+     "sha": "ab265c65bb3fefb3",
+     "tensorfold": {
+      "prefill_s": 0.0172,
+      "decode_s": 16.892,
+      "rounds": 339,
+      "drafts": true,
+      "cached": 43,
+      "min_rows": 2,
+      "drafted": 1491,
+      "accepted": 1160,
+      "token_sha": "0995a85f759a"
+     }
+    },
+    {
+     "ttft_s": 0.084,
+     "completion_tokens": 1500,
+     "decode_tps": 89.09,
+     "sha": "ab265c65bb3fefb3",
+     "tensorfold": {
+      "prefill_s": 0.0163,
+      "decode_s": 16.8243,
+      "rounds": 339,
+      "drafts": true,
+      "cached": 43,
+      "min_rows": 2,
+      "drafted": 1491,
+      "accepted": 1160,
+      "token_sha": "0995a85f759a"
+     }
+    }
+   ]
+  }
+ }
+}
