@@ -1,0 +1,10 @@
+start 37.2
+== A 8x140k mt=4000: OK(757.6s); OK(1475.5s); OK(1474.3s); OK(758.5s); OK(1293.5s); OK(575.6s); OK(1110.2s); OK(1470.7s)
+   MemAvailable=42.2 GiB health={'requests_running': None, 'streams': None}
+== B 8x140k mt=4000: OK(1141.4s); OK(1557.5s); OK(595.4s); OK(1554.5s); OK(1553.6s); OK(772.4s); OK(1559.1s); OK(1556.0s)
+   MemAvailable=42.9 GiB health={'requests_running': None, 'streams': None}
+== C idle probe 1x140k: OK(130.0s)
+   MemAvailable=43.0 GiB health={'requests_running': None, 'streams': None}
+== D idle probe 1x20k: OK(14.2s)
+   MemAvailable=44.6 GiB health={'requests_running': None, 'streams': None}
+DONE

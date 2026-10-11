@@ -1,0 +1,3 @@
+[tensorfold] vision: image and video input on this GPU, a 0.84 GiB tower (helper pid 180; {"torch":"2.13.0a0+9186a08b2c.nv26.07","transformers":"5.17.0","pillow":"12.3.0","numpy":"2.1.0","av":"19.0.1"}; self-test b519f02192431f6965510b499bf1cd22474d9298262730d78505b2658fa51678)
+info: vision: 2.00 GiB kept free for the image tower's workspace
+info: sequence memory: 33.54 GiB (45.54 GiB free, 10.0 GiB kept free); fp8 KV cache, 1056 bytes a position a layer

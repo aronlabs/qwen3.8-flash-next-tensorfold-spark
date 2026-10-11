@@ -1,0 +1,239 @@
+target http://10.10.2.196:8888/v1 model Qwen3.8-Flash-Next; streams=None decode levels=[1, 2, 3, 4, 5, 6, 7, 8] reps=3 warm=1 drain=5.0s gen=400 profile=greedy thinking=off distinct_prompts=True
+engine unknown zig-1.0.0-miaai image=None cpuset=None env=None
+recording to /home/aron/projects/llm-bench/results/ab-bench.db (run 31)
+  host before prefill: gpu 51.0 C, 13.04 W, sm 2411.0 MHz, mem avail 40.46 GiB, load 0.55
+
+== prefill (concurrency 1, fresh salt per request, 4.87 chars/token) ==
+  1K r0w: 2347.7 tok/s (ttft 0.45s) prompt 1048 tok [discarded]
+  1K r1: 2293.3 tok/s (ttft 0.45s) prompt 1037 tok
+  1K r2: 2336.1 tok/s (ttft 0.45s) prompt 1043 tok
+  1K r3: 2279.7 tok/s (ttft 0.45s) prompt 1028 tok
+  1K => median 2293.3 tok/s (spread 2.5%), ttft 0.45s
+  2K r0w: 2692.8 tok/s (ttft 0.76s) prompt 2036 tok [discarded]
+  2K r1: 2788.6 tok/s (ttft 0.73s) prompt 2037 tok
+  2K r2: 2747.4 tok/s (ttft 0.74s) prompt 2039 tok
+  2K r3: 2740.8 tok/s (ttft 0.74s) prompt 2035 tok
+  2K => median 2747.4 tok/s (spread 1.7%), ttft 0.74s
+  4K r0w: 2711.2 tok/s (ttft 1.50s) prompt 4071 tok [discarded]
+  4K r1: 2734.9 tok/s (ttft 1.48s) prompt 4046 tok
+  4K r2: 2696.0 tok/s (ttft 1.50s) prompt 4040 tok
+  4K r3: 2733.6 tok/s (ttft 1.48s) prompt 4051 tok
+  4K => median 2733.6 tok/s (spread 1.4%), ttft 1.48s
+  8K r0w: 2645.0 tok/s (ttft 3.07s) prompt 8131 tok [discarded]
+  8K r1: 2664.8 tok/s (ttft 3.05s) prompt 8128 tok
+  8K r2: 2658.1 tok/s (ttft 3.04s) prompt 8068 tok
+  8K r3: 2663.7 tok/s (ttft 3.03s) prompt 8082 tok
+  8K => median 2663.7 tok/s (spread 0.3%), ttft 3.04s
+  16K r0w: 2641.5 tok/s (ttft 6.14s) prompt 16207 tok [discarded]
+  16K r1: 2644.3 tok/s (ttft 6.11s) prompt 16145 tok
+  16K r2: 2639.6 tok/s (ttft 6.13s) prompt 16187 tok
+  16K r3: 2637.9 tok/s (ttft 6.15s) prompt 16221 tok
+  16K => median 2639.6 tok/s (spread 0.2%), ttft 6.13s
+  32K r0w: 2569.3 tok/s (ttft 12.60s) prompt 32379 tok [discarded]
+  32K r1: 2571.7 tok/s (ttft 12.52s) prompt 32204 tok
+  32K r2: 2570.0 tok/s (ttft 12.56s) prompt 32270 tok
+  32K r3: 2574.9 tok/s (ttft 12.55s) prompt 32311 tok
+  32K => median 2571.7 tok/s (spread 0.2%), ttft 12.55s
+  64K r0w: 2474.5 tok/s (ttft 26.10s) prompt 64585 tok [discarded]
+  64K r1: 2474.0 tok/s (ttft 26.12s) prompt 64611 tok
+  64K r2: 2467.1 tok/s (ttft 26.18s) prompt 64596 tok
+  64K r3: 2469.3 tok/s (ttft 26.17s) prompt 64633 tok
+  64K => median 2469.3 tok/s (spread 0.3%), ttft 26.17s
+  128K r0w: 2308.4 tok/s (ttft 55.95s) prompt 129166 tok [discarded]
+  128K r1: 2313.4 tok/s (ttft 55.81s) prompt 129098 tok
+  128K r2: 2315.3 tok/s (ttft 55.73s) prompt 129022 tok
+  128K r3: 2316.4 tok/s (ttft 55.78s) prompt 129218 tok
+  128K => median 2315.3 tok/s (spread 0.1%), ttft 55.78s
+  host after prefill: gpu 69.0 C, 18.94 W, sm 2405.0 MHz, mem avail 36.93 GiB, load 0.91
+  host before decode/structured: gpu 68.0 C, 17.39 W, sm 2405.0 MHz, mem avail 36.94 GiB, load 0.91
+
+== decode / structured (max_tokens 400, greedy) ==
+  x1 r0w: agg 163.9 tok/s, mean/str 163.9, ttft 93 ms [discarded]
+  x1 r1: agg 169.3 tok/s, mean/str 169.3, ttft 93 ms
+  x1 r2: agg 169.2 tok/s, mean/str 169.2, ttft 91 ms
+  x1 r3: agg 167.9 tok/s, mean/str 167.9, ttft 93 ms
+  x1 => median agg 169.2 tok/s (mean 168.8, spread 0.8%)
+  x2 r0w: agg 191.4 tok/s, mean/str 98.6, streams 1.94/2, ttft 184 ms [discarded]
+  x2 r1: agg 195.7 tok/s, mean/str 101.3, streams 1.93/2, ttft 188 ms
+  x2 r2: agg 206.4 tok/s, mean/str 104.5, streams 1.98/2, ttft 121 ms
+  x2 r3: agg 209.6 tok/s, mean/str 106.7, streams 1.97/2, ttft 120 ms
+  x2: spread 6.7% > 5.0%, re-measuring (1/1)
+  x2 r4: agg 199.4 tok/s, mean/str 101.9, streams 1.96/2, ttft 175 ms
+  x2 r5: agg 209.4 tok/s, mean/str 106.4, streams 1.97/2, ttft 121 ms
+  x2 r6: agg 202.9 tok/s, mean/str 103.7, streams 1.96/2, ttft 182 ms
+  x2 => median agg 204.6 tok/s (mean 203.9, spread 6.8%, FLAGGED)
+  x3 r0w: agg 234.4 tok/s, mean/str 83.4, streams 2.81/3, ttft 234 ms [discarded]
+  x3 r1: agg 234.2 tok/s, mean/str 82.8, streams 2.83/3, ttft 223 ms
+  x3 r2: agg 234.8 tok/s, mean/str 84.6, streams 2.78/3, ttft 228 ms
+  x3 r3: agg 235.8 tok/s, mean/str 85.0, streams 2.78/3, ttft 233 ms
+  x3 => median agg 234.8 tok/s (mean 234.9, spread 0.7%)
+  x4 r0w: agg 258.4 tok/s, mean/str 69.0, streams 3.76/4, ttft 229 ms [discarded]
+  x4 r1: agg 268.1 tok/s, mean/str 71.9, streams 3.74/4, ttft 255 ms
+  x4 r2: agg 269.6 tok/s, mean/str 70.2, streams 3.84/4, ttft 223 ms
+  x4 r3: agg 268.3 tok/s, mean/str 71.7, streams 3.75/4, ttft 256 ms
+  x4 => median agg 268.3 tok/s (mean 268.7, spread 0.6%)
+  x5 r0w: agg 281.7 tok/s, mean/str 60.5, streams 4.66/5, ttft 263 ms [discarded]
+  x5 r1: agg 277.2 tok/s, mean/str 59.2, streams 4.70/5, ttft 290 ms
+  x5 r2: agg 279.8 tok/s, mean/str 60.2, streams 4.66/5, ttft 287 ms
+  x5 r3: agg 279.7 tok/s, mean/str 59.7, streams 4.70/5, ttft 288 ms
+  x5 => median agg 279.7 tok/s (mean 278.9, spread 0.9%)
+  x6 r0w: agg 400.2 tok/s, mean/str 71.4, streams 5.61/6, ttft 318 ms [discarded]
+  x6 r1: agg 445.0 tok/s, mean/str 81.5, streams 5.47/6, ttft 332 ms
+  x6 r2: agg 446.4 tok/s, mean/str 80.9, streams 5.53/6, ttft 309 ms
+  x6 r3: agg 442.8 tok/s, mean/str 81.1, streams 5.47/6, ttft 310 ms
+  x6 => median agg 445.0 tok/s (mean 444.7, spread 0.8%)
+  x7 r0w: agg 473.7 tok/s, mean/str 74.0, streams 6.41/7, ttft 346 ms [discarded]
+  x7 r1: agg 483.5 tok/s, mean/str 74.1, streams 6.53/7, ttft 339 ms
+  x7 r2: agg 474.6 tok/s, mean/str 73.5, streams 6.46/7, ttft 311 ms
+  x7 r3: agg 483.9 tok/s, mean/str 74.2, streams 6.53/7, ttft 338 ms
+  x7 => median agg 483.5 tok/s (mean 480.6, spread 1.9%)
+  x8 r0w: agg 515.5 tok/s, mean/str 69.0, streams 7.47/8, ttft 358 ms [discarded]
+  x8 r1: agg 518.0 tok/s, mean/str 69.3, streams 7.48/8, ttft 363 ms
+  x8 r2: agg 501.7 tok/s, mean/str 69.0, streams 7.28/8, ttft 417 ms
+  x8 r3: agg 515.3 tok/s, mean/str 69.5, streams 7.42/8, ttft 367 ms
+  x8 => median agg 515.3 tok/s (mean 511.7, spread 3.2%)
+  host after decode/structured: gpu 58.0 C, 24.97 W, sm 2398.0 MHz, mem avail 36.98 GiB, load 0.79
+  host before decode/prose: gpu 58.0 C, 14.6 W, sm 2398.0 MHz, mem avail 36.98 GiB, load 0.79
+
+== decode / prose (max_tokens 400, greedy) ==
+  x1 r0w: agg 62.6 tok/s, mean/str 62.6, ttft 98 ms [discarded]
+  x1 r1: agg 63.8 tok/s, mean/str 63.8, ttft 99 ms
+  x1 r2: agg 63.8 tok/s, mean/str 63.8, ttft 98 ms
+  x1 r3: agg 63.7 tok/s, mean/str 63.7, ttft 96 ms
+  x1 => median agg 63.8 tok/s (mean 63.7, spread 0.2%)
+  x2 r0w: agg 95.0 tok/s, mean/str 47.5, streams 2.00/2, ttft 229 ms [discarded]
+  x2 r1: agg 100.3 tok/s, mean/str 51.0, streams 1.97/2, ttft 173 ms
+  x2 r2: agg 101.4 tok/s, mean/str 51.3, streams 1.98/2, ttft 168 ms
+  x2 r3: agg 102.3 tok/s, mean/str 51.3, streams 1.99/2, ttft 134 ms
+  x2 => median agg 101.4 tok/s (mean 101.4, spread 1.9%)
+  x3 r0w: agg 116.0 tok/s, mean/str 41.3, streams 2.82/3, ttft 182 ms [discarded]
+  x3 r1: agg 121.5 tok/s, mean/str 43.7, streams 2.79/3, ttft 209 ms
+  x3 r2: agg 121.8 tok/s, mean/str 43.9, streams 2.78/3, ttft 209 ms
+  x3 r3: agg 121.1 tok/s, mean/str 43.5, streams 2.79/3, ttft 215 ms
+  x3 => median agg 121.5 tok/s (mean 121.5, spread 0.6%)
+  x4 r0w: agg 133.7 tok/s, mean/str 35.7, streams 3.75/4, ttft 260 ms [discarded]
+  x4 r1: agg 143.5 tok/s, mean/str 38.4, streams 3.74/4, ttft 243 ms
+  x4 r2: agg 144.2 tok/s, mean/str 38.5, streams 3.75/4, ttft 242 ms
+  x4 r3: agg 139.7 tok/s, mean/str 37.4, streams 3.74/4, ttft 241 ms
+  x4 => median agg 143.5 tok/s (mean 142.5, spread 3.1%)
+  x5 r0w: agg 154.3 tok/s, mean/str 34.7, streams 4.49/5, ttft 300 ms [discarded]
+  x5 r1: agg 162.2 tok/s, mean/str 36.7, streams 4.46/5, ttft 273 ms
+  x5 r2: agg 160.5 tok/s, mean/str 36.6, streams 4.42/5, ttft 383 ms
+  x5 r3: agg 156.8 tok/s, mean/str 35.5, streams 4.45/5, ttft 275 ms
+  x5 => median agg 160.5 tok/s (mean 159.8, spread 3.3%)
+  x6 r0w: agg 165.9 tok/s, mean/str 31.2, streams 5.35/6, ttft 325 ms [discarded]
+  x6 r1: agg 176.2 tok/s, mean/str 33.4, streams 5.33/6, ttft 426 ms
+  x6 r2: agg 172.4 tok/s, mean/str 33.1, streams 5.26/6, ttft 287 ms
+  x6 r3: agg 173.8 tok/s, mean/str 33.2, streams 5.28/6, ttft 315 ms
+  x6 => median agg 173.8 tok/s (mean 174.1, spread 2.1%)
+  x7 r0w: agg 175.3 tok/s, mean/str 28.8, streams 6.15/7, ttft 362 ms [discarded]
+  x7 r1: agg 180.3 tok/s, mean/str 29.7, streams 6.12/7, ttft 339 ms
+  x7 r2: agg 179.9 tok/s, mean/str 29.8, streams 6.10/7, ttft 319 ms
+  x7 r3: agg 175.3 tok/s, mean/str 29.4, streams 6.03/7, ttft 437 ms
+  x7 => median agg 179.9 tok/s (mean 178.5, spread 2.8%)
+  x8 r0w: agg 186.9 tok/s, mean/str 26.9, streams 7.00/8, ttft 442 ms [discarded]
+  x8 r1: agg 188.5 tok/s, mean/str 28.1, streams 6.79/8, ttft 359 ms
+  x8 r2: agg 183.9 tok/s, mean/str 28.2, streams 6.61/8, ttft 354 ms
+  x8 r3: agg 184.9 tok/s, mean/str 28.4, streams 6.60/8, ttft 349 ms
+  x8 => median agg 184.9 tok/s (mean 185.8, spread 2.5%)
+  host after decode/prose: gpu 60.0 C, 19.44 W, sm 2398.0 MHz, mem avail 36.92 GiB, load 0.91
+  host before decode/code: gpu 60.0 C, 14.79 W, sm 2398.0 MHz, mem avail 36.91 GiB, load 0.91
+
+== decode / code (max_tokens 400, greedy) ==
+  x1 r0w: agg 119.9 tok/s, mean/str 119.9, ttft 135 ms [discarded]
+  x1 r1: agg 121.9 tok/s, mean/str 121.9, ttft 125 ms
+  x1 r2: agg 120.8 tok/s, mean/str 120.8, ttft 126 ms
+  x1 r3: agg 120.7 tok/s, mean/str 120.7, ttft 128 ms
+  x1 => median agg 120.8 tok/s (mean 121.1, spread 1.0%)
+  x2 r0w: agg 154.2 tok/s, mean/str 80.9, streams 1.91/2, ttft 177 ms [discarded]
+  x2 r1: agg 157.5 tok/s, mean/str 84.1, streams 1.88/2, ttft 165 ms
+  x2 r2: agg 154.1 tok/s, mean/str 83.6, streams 1.85/2, ttft 213 ms
+  x2 r3: agg 152.9 tok/s, mean/str 83.1, streams 1.84/2, ttft 221 ms
+  x2 => median agg 154.1 tok/s (mean 154.9, spread 3.0%)
+  x3 r0w: agg 184.4 tok/s, mean/str 66.0, streams 2.80/3, ttft 279 ms [discarded]
+  x3 r1: agg 195.9 tok/s, mean/str 68.6, streams 2.86/3, ttft 210 ms
+  x3 r2: agg 189.4 tok/s, mean/str 66.9, streams 2.83/3, ttft 246 ms
+  x3 r3: agg 187.8 tok/s, mean/str 68.2, streams 2.75/3, ttft 286 ms
+  x3 => median agg 189.4 tok/s (mean 191.0, spread 4.3%)
+  x4 r0w: agg 212.3 tok/s, mean/str 56.3, streams 3.78/4, ttft 335 ms [discarded]
+  x4 r1: agg 196.6 tok/s, mean/str 56.1, streams 3.52/4, ttft 326 ms
+  x4 r2: agg 212.4 tok/s, mean/str 56.8, streams 3.74/4, ttft 339 ms
+  x4 r3: agg 198.1 tok/s, mean/str 56.7, streams 3.51/4, ttft 330 ms
+  x4: spread 8.0% > 5.0%, re-measuring (1/1)
+  x4 r4: agg 211.6 tok/s, mean/str 56.9, streams 3.72/4, ttft 361 ms
+  x4 r5: agg 197.6 tok/s, mean/str 56.6, streams 3.51/4, ttft 327 ms
+  x4 r6: agg 201.1 tok/s, mean/str 56.2, streams 3.59/4, ttft 374 ms
+  x4 => median agg 199.6 tok/s (mean 202.9, spread 7.9%, FLAGGED)
+  x5 r0w: agg 234.0 tok/s, mean/str 50.2, streams 4.67/5, ttft 346 ms [discarded]
+  x5 r1: agg 233.9 tok/s, mean/str 51.2, streams 4.58/5, ttft 393 ms
+  x5 r2: agg 232.5 tok/s, mean/str 50.5, streams 4.61/5, ttft 378 ms
+  x5 r3: agg 238.5 tok/s, mean/str 51.9, streams 4.60/5, ttft 301 ms
+  x5 => median agg 233.9 tok/s (mean 235.0, spread 2.6%)
+  x6 r0w: agg 227.0 tok/s, mean/str 44.1, streams 5.19/6, ttft 485 ms [discarded]
+  x6 r1: agg 247.4 tok/s, mean/str 47.1, streams 5.28/6, ttft 476 ms
+  x6 r2: agg 250.8 tok/s, mean/str 46.8, streams 5.38/6, ttft 390 ms
+  x6 r3: agg 248.1 tok/s, mean/str 46.0, streams 5.41/6, ttft 391 ms
+  x6 => median agg 248.1 tok/s (mean 248.8, spread 1.3%)
+  x7 r0w: agg 252.8 tok/s, mean/str 40.8, streams 6.22/7, ttft 450 ms [discarded]
+  x7 r1: agg 275.7 tok/s, mean/str 43.8, streams 6.31/7, ttft 436 ms
+  x7 r2: agg 270.6 tok/s, mean/str 44.3, streams 6.15/7, ttft 426 ms
+  x7 r3: agg 273.9 tok/s, mean/str 43.7, streams 6.29/7, ttft 459 ms
+  x7 => median agg 273.9 tok/s (mean 273.4, spread 1.9%)
+  x8 r0w: agg 276.1 tok/s, mean/str 39.4, streams 7.03/8, ttft 498 ms [discarded]
+  x8 r1: agg 293.3 tok/s, mean/str 42.1, streams 7.00/8, ttft 470 ms
+  x8 r2: agg 289.4 tok/s, mean/str 41.5, streams 7.01/8, ttft 476 ms
+  x8 r3: agg 291.5 tok/s, mean/str 41.9, streams 6.99/8, ttft 469 ms
+  x8 => median agg 291.5 tok/s (mean 291.4, spread 1.3%)
+  host after decode/code: gpu 60.0 C, 19.08 W, sm 2398.0 MHz, mem avail 36.91 GiB, load 0.76
+  host before decode/json: gpu 60.0 C, 14.6 W, sm 2398.0 MHz, mem avail 36.91 GiB, load 0.94
+
+== decode / json (max_tokens 400, greedy) ==
+  x1 r0w: agg 83.2 tok/s, mean/str 83.2, ttft 115 ms [discarded]
+  x1 r1: agg 87.7 tok/s, mean/str 87.7, ttft 114 ms
+  x1 r2: agg 87.6 tok/s, mean/str 87.6, ttft 114 ms
+  x1 r3: agg 87.2 tok/s, mean/str 87.2, ttft 117 ms
+  x1 => median agg 87.6 tok/s (mean 87.5, spread 0.6%)
+  x2 r0w: agg 111.9 tok/s, mean/str 61.4, streams 1.83/2, ttft 210 ms [discarded]
+  x2 r1: agg 118.8 tok/s, mean/str 65.3, streams 1.83/2, ttft 192 ms
+  x2 r2: agg 118.9 tok/s, mean/str 65.3, streams 1.83/2, ttft 191 ms
+  x2 r3: agg 121.0 tok/s, mean/str 65.0, streams 1.87/2, ttft 147 ms
+  x2 => median agg 118.9 tok/s (mean 119.6, spread 1.8%)
+  x3 r0w: agg 129.2 tok/s, mean/str 50.9, streams 2.57/3, ttft 260 ms [discarded]
+  x3 r1: agg 136.3 tok/s, mean/str 53.2, streams 2.60/3, ttft 224 ms
+  x3 r2: agg 133.9 tok/s, mean/str 52.9, streams 2.56/3, ttft 258 ms
+  x3 r3: agg 134.1 tok/s, mean/str 53.1, streams 2.55/3, ttft 281 ms
+  x3 => median agg 134.1 tok/s (mean 134.8, spread 1.8%)
+  x4 r0w: agg 158.6 tok/s, mean/str 47.0, streams 3.40/4, ttft 308 ms [discarded]
+  x4 r1: agg 162.6 tok/s, mean/str 48.0, streams 3.42/4, ttft 289 ms
+  x4 r2: agg 163.3 tok/s, mean/str 48.1, streams 3.42/4, ttft 282 ms
+  x4 r3: agg 163.6 tok/s, mean/str 48.1, streams 3.43/4, ttft 281 ms
+  x4 => median agg 163.3 tok/s (mean 163.1, spread 0.6%)
+  x5 r0w: agg 173.2 tok/s, mean/str 40.2, streams 4.33/5, ttft 403 ms [discarded]
+  x5 r1: agg 167.5 tok/s, mean/str 42.6, streams 3.98/5, ttft 317 ms
+  x5 r2: agg 186.3 tok/s, mean/str 42.7, streams 4.37/5, ttft 342 ms
+  x5 r3: agg 175.2 tok/s, mean/str 42.5, streams 4.17/5, ttft 320 ms
+  x5: spread 10.7% > 5.0%, re-measuring (1/1)
+  x5 r4: agg 185.8 tok/s, mean/str 42.0, streams 4.45/5, ttft 321 ms
+  x5 r5: agg 173.5 tok/s, mean/str 42.9, streams 4.09/5, ttft 338 ms
+  x5 r6: agg 168.6 tok/s, mean/str 43.3, streams 3.96/5, ttft 330 ms
+  x5 => median agg 174.4 tok/s (mean 176.2, spread 10.7%, FLAGGED)
+  x6 r0w: agg 191.6 tok/s, mean/str 38.1, streams 5.07/6, ttft 376 ms [discarded]
+  x6 r1: agg 186.9 tok/s, mean/str 38.7, streams 4.87/6, ttft 360 ms
+  x6 r2: agg 186.2 tok/s, mean/str 38.7, streams 4.86/6, ttft 354 ms
+  x6 r3: agg 196.0 tok/s, mean/str 39.3, streams 5.03/6, ttft 350 ms
+  x6: spread 5.2% > 5.0%, re-measuring (1/1)
+  x6 r4: agg 192.2 tok/s, mean/str 38.6, streams 5.03/6, ttft 319 ms
+  x6 r5: agg 198.7 tok/s, mean/str 39.3, streams 5.09/6, ttft 345 ms
+  x6 r6: agg 189.8 tok/s, mean/str 39.3, streams 4.87/6, ttft 378 ms
+  x6 => median agg 191.0 tok/s (mean 191.6, spread 6.6%, FLAGGED)
+  x7 r0w: agg 209.1 tok/s, mean/str 36.2, streams 5.82/7, ttft 403 ms [discarded]
+  x7 r1: agg 211.9 tok/s, mean/str 36.6, streams 5.82/7, ttft 462 ms
+  x7 r2: agg 213.8 tok/s, mean/str 36.7, streams 5.87/7, ttft 373 ms
+  x7 r3: agg 215.4 tok/s, mean/str 37.1, streams 5.85/7, ttft 385 ms
+  x7 => median agg 213.8 tok/s (mean 213.7, spread 1.6%)
+  x8 r0w: agg 230.8 tok/s, mean/str 35.8, streams 6.54/8, ttft 435 ms [discarded]
+  x8 r1: agg 231.9 tok/s, mean/str 36.6, streams 6.46/8, ttft 418 ms
+  x8 r2: agg 234.5 tok/s, mean/str 36.6, streams 6.50/8, ttft 411 ms
+  x8 r3: agg 231.0 tok/s, mean/str 36.3, streams 6.47/8, ttft 410 ms
+  x8 => median agg 231.9 tok/s (mean 232.5, spread 1.5%)
+  host after decode/json: gpu 60.0 C, 18.08 W, sm 2398.0 MHz, mem avail 36.86 GiB, load 1.71

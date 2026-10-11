@@ -1,10 +1,85 @@
-# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold 0.6 (python-0.6 @ed78d6f): Concurrency, Prefill, Speculative & Copy-Draft Tuning
+# Qwen3.8 Flash-Next on NVIDIA DGX Spark with TensorFold: MiaAI-Lab 1.0.0 (current) and python-0.6 tuning (previous): Concurrency, Prefill, Speculative & Copy-Draft
+
+> **Status, 2026-10-11:** production is now **MiaAI-Lab's recipe 1.0.0 (TensorFold Zig engine, INT4-AutoRound, 8 streams)**, stock and unmodified. See [Current build](#-current-build-miaai-lab-recipe-100-zig-production-since-2026-10-11) below. Everything from the Executive Summary down describes the **python-0.6 build**, which this repository's patches, `Dockerfile` and scripts produce. It is kept as the rollback and is no longer the production server.
 
 High-throughput, exact local inference for **Qwen3.8-Flash-Next** on a single **NVIDIA DGX Spark** (GB10 ARM64, 121 GB unified memory).
 
 This repository ports, extends, and benchmarks the high-performance patches from **@MiaAI_Lab's** DGX Spark recipe onto **@ashxhart's** **TensorFold** (the `python-0.6` branch at [`ed78d6f`](https://github.com/ashhart/TensorFold/commit/ed78d6fc204d89d90b045bf033d6551e7714f3a1): v0.6.6 plus 12 commits), introducing Cortex-X925 core affinity pinning (`--cpuset-cpus "5-9,15-19"`), zero-copy Python-CUDA pointer passing, greedy decoding fast paths, prefill chunk geometry tuning, message boundary prefix cache multi-tenancy, and Blackwell-optimized tile schedules. The current build adds **copy drafts**, authored by **[BobClawblaw (@BobClawblaw)](https://github.com/BobClawblaw)** in [TensorFold PR #468](https://github.com/ashhart/TensorFold/pull/468) (commit [`6bf4caf`](https://github.com/ashhart/TensorFold/commit/6bf4caf)), with a small local patch so they work at this recipe's 6-draft depth.
 
 ---
+
+## 🆕 Current build: MiaAI-Lab recipe 1.0.0 (Zig), production since 2026-10-11
+
+The Spark now serves [MiaAI-Lab's recipe](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold) at release **1.0.0** (`364f21a`) exactly as published, with no local edits and no `.env`. This repository adds no patches to it; what it contributes here is the benchmark data, the NoRoom retest and the client-side settings below. All raw data is in [`results/v1.0.0-zig/`](results/v1.0.0-zig/README.md).
+
+| | python-0.6 build (previous, rest of this README) | **1.0.0 (current)** |
+|---|---|---|
+| Engine | TensorFold python-0.6 `ed78d6f` + copy drafts | TensorFold Zig engine `db281878` + the recipe's 9 patches (image `tensorfold-qwen38:zig-db28187`) |
+| Checkpoint | Vontra MLX 4-bit g32 with MTP head | [azampatti INT4-AutoRound](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound) @ `14642741` (top-5 experts) |
+| KV cache | int8 | FP8 (`KV_DTYPE=fp8`; lossy, about 98.8% top-1 agreement with bf16 per the recipe) |
+| Streams x window | 5 x 262,144 | **8 x 262,144** (`PARALLEL=8` is a cap) |
+| Sequence pool | n/a (per-stream) | **33-34 GiB** at boot (free memory minus a 10 GiB reserve and 2 GiB for vision) |
+| Load time | 28-30 s warm | about 107 s (first start 100 s) |
+| `/health` | `{ok, streams, context_length, ...}` | `{status, model, max_batch_size, live, memory}`; counters on `/metrics` (`tensorfold:*`) |
+
+### Benchmarks (2026-10-08, idle server, stock recipe)
+
+ab-bench run 31 (protocol 3: greedy, thinking off, 400 tokens), median aggregate decode tok/s, with the change against run 27 (python-0.6 copy drafts, Vontra checkpoint). x6-x8 have no counterpart because the older stack was run to x5:
+
+| Type | x1 | x2 | x3 | x4 | x5 | x6 | x7 | x8 |
+|---|---|---|---|---|---|---|---|---|
+| structured | 169.2 (+31.8%) | 204.6 (+6.1%)* | 234.8 (-7.1%) | 268.3 (-13.9%) | 279.7 (-20.8%) | 445.0 | 483.5 | 515.3 |
+| prose | 63.8 (-9.5%) | 101.4 (+2.5%) | 121.5 (+7.4%) | 143.5 (+12.0%) | 160.5 (+11.8%) | 173.8 | 179.9 | 184.9 |
+| code | 120.8 (+19.5%) | 154.1 (+8.6%) | 189.4 (+11.4%) | 199.6 (+7.7%)* | 233.9 (+15.1%) | 248.1 | 273.9 | 291.5 |
+| json | 87.6 (-0.3%) | 118.9 (-5.3%) | 134.1 (-3.8%) | 163.3 (-0.9%) | 174.4 (-5.1%)* | 191.0* | 213.8 | 231.9 |
+
+\* spread above 5% after one rerun. Output was identical across rounds in every cell. The structured jump from x5 to x6 (280 to 445) appears in both ab-bench and the 1-8 curve; its cause was not investigated.
+
+Prefill, client-side tok/s (this engine reports no server-side prefill time):
+
+| Context | 1K | 2K | 4K | 8K | 16K | 32K | 64K | 128K |
+|---|---|---|---|---|---|---|---|---|
+| 1.0.0 (run 31) | 2,293 | 2,747 | 2,734 | 2,664 | 2,640 | 2,572 | 2,469 | 2,315 |
+| python-0.6 (run 27) | 1,746 | 2,335 | 2,701 | 2,870 | 2,856 | 2,786 | 2,655 | 2,386 |
+
+sparkDash decode sweeps (mean of 2 runs, x1-x5): structured 163.8 / 189.9 / 219.9 / 256.1 / 259.6, prose 61.2 / 96.7 / 121.1 / 151.2 / 168.7, code 117.7 / 153.8 / 184.7 / 207.7 / 232.7. Prefill 4k / 16k / 32k / 64k: 2,747 / 2,760 / 2,741 / 2,666 tok/s. Recipe checks: `toolcheck.py` 3/3, `visioncheck.py` OK, `needle.py` found a fact in a 199,730-token prompt, `context_boundary.py --context 262144` 16/16.
+
+**Reading:** faster at code (+8% to +20%) and at mid-concurrency prose; slower at structured x3-x5 (-7% to -21%), prose x1 (-9.5%), and prefill from 8K to 64K (7-8% slower). Eight concurrent streams hold, with aggregate decode still rising to x8. The checkpoint differs (top-5 experts, about 10% lower general capability per its authors), so compare speed, not quality. Not measured: restart load time, sampled/production-like profile, a paired A/B on the same boot, the bf16 KV option.
+
+### NoRoom retest (2026-10-11)
+
+Upstream issue [#39](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/issues/39), reported by [Siphi1239](https://github.com/Siphi1239): after a mixed burst the engine keeps its pool mapped and then refuses large requests with `NoRoom` (HTTP 500) on an idle server until restart. The maintainer's reply (2026-10-11) says it cannot be reproduced or fixed without a free GPU, and leaves it open. Related and also open: [#33](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/issues/33) (reported by [base-wtf](https://github.com/base-wtf): steady `NV_ERR_NO_MEMORY` kernel messages under load, no failed requests).
+
+| Run | Pool | Load | Result |
+|---|---|---|---|
+| `noroom-run2` | 33 GiB | #39's phases: 8 short, 4x200k, 6x200k, mixed 3x100k + 4 large images, probes on the idle server | all OK, 0 NoRoom, `MemAvailable` 35-39 GiB throughout |
+| `fill8b` | 18.3 GiB (`TENSORFOLD_MEMORY_RESERVE_GIB=25`, near the reporter's 18.9) | 2 rounds of 8 concurrent ~140k prompts, `max_tokens` 4000, then idle probes | all 16 OK (576-1,559 s each), idle probes OK, `MemAvailable` ended above where it started, 0 NoRoom |
+
+Two earlier attempts were invalid and are kept in the data with notes: prompts that overshot the 262,144 window (HTTP 400), and eight 200k prefills that outlasted a 1,800 s client timeout. Eight concurrent 200k prefills are slow (many minutes each), and a client that gives up leaves its requests queued server-side (8 running, 17 waiting was observed).
+
+Not reproduced with synthetic load. One cause that needs no bug: one full 262,144 window is 4.37 GiB of FP8 KV (the recipe's CHANGELOG), the pool holds about 7.5 of them, and admission counts prompt plus `max_tokens` (the recipe's default is 32,768) and refuses a request that does not fit. Eight agent sessions all near full context can exceed that. This is inference from the numbers, not a captured production error.
+
+**Client-side settings used to keep 8 streams inside the pool** (omp, `models.yml` and `config.yml`):
+
+```yaml
+# models.yml: provider dgx-spark, model qwen3.8-flash-next
+maxTokens: 16384            # was 32768; the server counts prompt + max_tokens at admission
+# config.yml
+compaction:
+  modelThresholds:
+    dgx-spark/qwen3.8-flash-next: "f150000"   # exact trigger; omp's default is about 223K (85% of 262,144)
+```
+
+Worst case becomes 8 x (150K + 16K) = 1.33M positions, against about 2.0M for a 33.5 GiB pool at 17.5 KB per position (4.37 GiB per 262,144 window; about 1.57M on the CHANGELOG's more conservative six-window figure). Whether this removes the refusals in real use is not yet measured.
+
+### Why not TensorFold 1.0.7 (2026-10-11)
+
+TensorFold 1.0.7 added Living Weights (a running model learns facts into its own weights), but the stock Linux/CUDA build lists only `nemotron_h` in `capabilities`; Flash Next runs there only on Apple silicon. This recipe's CUDA Flash Next support lives in its 9 patches on `db281878`. Applying them to the 1.0.7 tree fails at patch 0001, and a 3-way merge conflicts in 8 core engine files (`lane_host.zig`, `safetensors.zig`, `lanes/engine.zig`, others). TensorFold 1.0.2 and later also revert the tool-call handling that issue [#40](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/issues/40) relies on. So production stays on `db281878`. (Living Weights was tested separately on Nemotron 3.5 Lightning and is outside this repository.)
+
+### Operations
+
+Start and stop go through the recipe's `./start.sh` / `./stop.sh` (`env -u SERVED_NAME -u PARALLEL -u CONTEXT ./start.sh`) or the sparkDash launcher. A watcher relaunches the server after 3 failing health minutes. The recipe's `start.sh` banner prints "bf16 KV" although the engine runs FP8; the engine log line `sequence memory ... fp8 KV cache` is authoritative. The recipe's `start.sh` reads free memory with `free -g | awk '/^Mem:/'`, which fails on non-English locales (fixed upstream on `main` in `b5a1b04`, after 1.0.0).
+
 
 ## ⚡ Executive Summary: Verified Peak Records
 
@@ -120,6 +195,9 @@ This project builds directly on the foundational work of:
 * **[Vontra](https://huggingface.co/Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP):** For the MLX affine 4-bit group-32 checkpoint with the native MTP speculative draft head.
 * **[philip-pentatonic (@philip-pentatonic)](https://github.com/philip-pentatonic):** Authored the `--name-priority` flag in [TensorFold PR #445](https://github.com/ashhart/TensorFold/pull/445), released in 0.6.6.
 * **[BobClawblaw (@BobClawblaw)](https://github.com/BobClawblaw):** Authored Flash Next CUDA copy drafts in [TensorFold PR #468](https://github.com/ashhart/TensorFold/pull/468) (commit [`6bf4caf`](https://github.com/ashhart/TensorFold/commit/6bf4caf)) and image input on the serial engine and two ranks in [TensorFold PR #473](https://github.com/ashhart/TensorFold/pull/473), both on the `python-0.6` branch this build uses. `local-copy-match.patch` only changes when his copy drafts fire.
+* **[azampatti](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound):** Authored the INT4-AutoRound checkpoint (`azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound`) that the 1.0.0 recipe serves.
+* **[Mia's AI Lab (@MiaAI_Lab)](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold), 1.0.0 recipe:** Authored the 1.0.0 Zig-engine recipe (patches `0001`-`0009`, `start.sh`, `prepare.sh`, the published image) that is now production here, unmodified.
+* **[Siphi1239](https://github.com/Siphi1239) and [base-wtf](https://github.com/base-wtf):** Reported and diagnosed upstream issues [#39](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/issues/39) (NoRoom after a mixed burst) and [#33](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold/issues/33) (`NV_ERR_NO_MEMORY` under load); the NoRoom retest above follows #39's phases.
 
 ---
 
@@ -222,7 +300,7 @@ We thoroughly evaluated alternative configurations that failed or performed wors
 
 ---
 
-## 🏆 The Production Stack
+## 🏆 The python-0.6 Production Stack (previous production, kept for rollback)
 
 Deploy this configuration on a single DGX Spark:
 

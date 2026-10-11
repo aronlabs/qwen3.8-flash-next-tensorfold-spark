@@ -1,0 +1,16 @@
+start MemAvailable 35.3
+   MemAvailable=35.4 GiB health={'requests_running': None, 'streams': None}
+== 1 8xshort: OK(35.5s); OK(35.5s); OK(35.5s); OK(69.8s); OK(37.2s); OK(69.8s); OK(69.8s); OK(72.4s)
+   MemAvailable=35.6 GiB health={'requests_running': None, 'streams': None}
+== 2 4x200k: OK(1055.8s); OK(807.2s); OK(807.2s); OK(807.2s)
+   MemAvailable=37.1 GiB health={'requests_running': None, 'streams': None}
+== 3 6x200k: OK(961.4s); OK(1357.1s); OK(543.7s); OK(296.5s); OK(1159.8s); OK(753.8s)
+   MemAvailable=37.7 GiB health={'requests_running': None, 'streams': None}
+== 4 mixed: OK(256.7s); OK(156.4s); OK(366.8s); OK(372.6s); OK(379.2s); OK(376.9s); OK(377.6s)
+   MemAvailable=36.2 GiB health={'requests_running': None, 'streams': None}
+== 5 short: OK(0.6s)
+   MemAvailable=36.3 GiB health={'requests_running': None, 'streams': None}
+== 6 idle probe x1 200k: OK(216.9s)
+   MemAvailable=36.3 GiB health={'requests_running': None, 'streams': None}
+== 6 idle probe x2 200k: OK(424.5s); OK(424.6s)
+   MemAvailable=38.9 GiB health={'requests_running': None, 'streams': None}

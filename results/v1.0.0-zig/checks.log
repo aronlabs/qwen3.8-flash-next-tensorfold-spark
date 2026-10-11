@@ -1,0 +1,21 @@
+=== toolcheck
+  call tool call add_tags({"doc_id":42,"tags":["urgent","finance","q3"]})  id=call_a02418ff335b31d8e34df206
+  stream tool call add_tags({"doc_id":42,"tags":["urgent", "finance", "q3"]})  id=call_46fcab9c4916c1dceefb7790
+PASS call: tags is a JSON array ['urgent', 'finance', 'q3'], doc_id the integer 42, finish tool_calls
+PASS stream: tags is a JSON array ['urgent', 'finance', 'q3'], doc_id the integer 42, finish tool_calls
+PASS result: after the server's own call and its result, the reply quotes TAGGED-58213-KESTREL: 'The tags have been applied successfully. The confirmation code returned by the tool is:\n\n**TAGGED-58'
+toolcheck: 3/3 passed
+exit=0
+=== visioncheck
+reply (150 prompt tokens): The image contains a red circle and a blue square.
+visioncheck: OK: the model sees the red circle and the blue square
+exit=0
+=== context_boundary
+usage: context_boundary.py [-h] --context CONTEXT
+context_boundary.py: error: the following arguments are required: --context
+exit=0
+=== needle
+needle: prompt 199730 tokens (asked ~200000), needle at 60%, prefill 98.01 s, total 100.3 s, answer 'warm-library-4557', found yes
+exit=0
+context_boundary: PASS: 16 checks; prompt=20, context=262144
+exit=0

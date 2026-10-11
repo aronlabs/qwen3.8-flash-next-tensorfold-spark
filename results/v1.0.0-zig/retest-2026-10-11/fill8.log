@@ -1,0 +1,21 @@
+start 36.0
+== round1 8x200k max_tokens=2000: ERR(1800.3s); ERR(1800.3s); ERR(1800.3s); ERR(1800.3s); ERR(1800.3s); ERR(1800.3s); ERR(1800.3s); ERR(1800.3s)
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+   MemAvailable=26.7 GiB health={'requests_running': None, 'streams': None}
+== round2 8x200k max_tokens=32768: ERR(1800.2s); ERR(1800.2s); ERR(1800.3s); ERR(1800.3s); ERR(1800.1s); ERR(1800.2s); ERR(1800.1s); ERR(1800.1s)
+    ('ERR', 1800.2, "TimeoutError('timed out')")
+    ('ERR', 1800.2, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.3, "TimeoutError('timed out')")
+    ('ERR', 1800.1, "TimeoutError('timed out')")
+    ('ERR', 1800.2, "TimeoutError('timed out')")
+    ('ERR', 1800.1, "TimeoutError('timed out')")
+    ('ERR', 1800.1, "TimeoutError('timed out')")
+   MemAvailable=32.4 GiB health={'requests_running': None, 'streams': None}

@@ -1,0 +1,29 @@
+start MemAvailable 44.0
+   MemAvailable=44.1 GiB health={'requests_running': None, 'streams': None}
+== 1 8xshort: OK(67.1s); OK(67.1s); OK(67.1s); OK(75.2s); OK(78.2s); OK(87.7s); OK(95.8s); OK(88.9s)
+   MemAvailable=34.7 GiB health={'requests_running': None, 'streams': None}
+== 2 4x200k: HTTP400(0.3s); HTTP400(0.3s); HTTP400(0.4s); HTTP400(0.3s)
+    ('HTTP400', 0.3, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 376045 tokens ')
+    ('HTTP400', 0.3, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375816 tokens ')
+    ('HTTP400', 0.4, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 376195 tokens ')
+    ('HTTP400', 0.3, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375495 tokens ')
+   MemAvailable=33.8 GiB health={'requests_running': None, 'streams': None}
+== 3 6x200k: HTTP400(0.8s); HTTP400(0.7s); HTTP400(0.8s); HTTP400(0.8s); HTTP400(0.7s); HTTP400(0.7s)
+    ('HTTP400', 0.8, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375311 tokens ')
+    ('HTTP400', 0.7, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375787 tokens ')
+    ('HTTP400', 0.8, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375825 tokens ')
+    ('HTTP400', 0.8, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375806 tokens ')
+    ('HTTP400', 0.7, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 376293 tokens ')
+    ('HTTP400', 0.7, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375179 tokens ')
+   MemAvailable=33.6 GiB health={'requests_running': None, 'streams': None}
+== 4 mixed: OK(782.3s); OK(313.1s); OK(554.0s); OK(786.7s); OK(834.6s); OK(793.5s); OK(821.9s)
+   MemAvailable=35.4 GiB health={'requests_running': None, 'streams': None}
+== 5 short: OK(0.6s)
+   MemAvailable=37.4 GiB health={'requests_running': None, 'streams': None}
+== 6 idle probe x1 200k: HTTP400(0.4s)
+    ('HTTP400', 0.4, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375954 tokens ')
+   MemAvailable=36.5 GiB health={'requests_running': None, 'streams': None}
+== 6 idle probe x2 200k: HTTP400(0.4s); HTTP400(0.4s)
+    ('HTTP400', 0.4, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375787 tokens ')
+    ('HTTP400', 0.4, '{"error": {"message": "This server\'s maximum context length is 262144 tokens, but the rendered prompt has 375872 tokens ')
+   MemAvailable=36.6 GiB health={'requests_running': None, 'streams': None}
